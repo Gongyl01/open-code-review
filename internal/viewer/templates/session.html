@@ -14,6 +14,14 @@
     <div class="meta">
         <span><strong>CWD:</strong> {{.Session.Summary.CWD}}</span>
         <span><strong>Branch:</strong> {{.Session.Summary.GitBranch}}</span>
+        <span><strong>Mode:</strong> {{if .Session.Summary.ReviewMode}}{{.Session.Summary.ReviewMode}}{{else}}-{{end}}</span>
+        {{if eq .Session.Summary.ReviewMode "range"}}
+        <span><strong>From:</strong> <code>{{.Session.Summary.DiffFrom}}</code></span>
+        <span><strong>To:</strong> <code>{{.Session.Summary.DiffTo}}</code></span>
+        {{end}}
+        {{if eq .Session.Summary.ReviewMode "commit"}}
+        <span><strong>Commit:</strong> <code>{{.Session.Summary.DiffCommit}}</code></span>
+        {{end}}
         <span><strong>Model:</strong> <code>{{.Session.Summary.Model}}</code></span>
         <span><strong>Duration:</strong> {{formatDuration .Session.Summary.DurationSec}}</span>
         <span><strong>Files:</strong> {{.Session.Summary.FileCount}}</span>

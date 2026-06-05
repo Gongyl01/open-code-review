@@ -22,6 +22,12 @@ const (
 	ReLocationTask        TaskType = "re_location_task"
 )
 
+const (
+	ReviewModeWorkspace = "workspace"
+	ReviewModeRange     = "range"
+	ReviewModeCommit    = "commit"
+)
+
 // SessionHistory is the top-level container for an entire CR run.
 // It is safe for concurrent use by multiple goroutines.
 type SessionHistory struct {
@@ -30,6 +36,10 @@ type SessionHistory struct {
 	RepoDir      string
 	GitBranch    string
 	Model        string
+	ReviewMode   string
+	DiffFrom     string
+	DiffTo       string
+	DiffCommit   string
 	StartTime    time.Time
 	EndTime      time.Time
 	persist      *jsonlWriter
@@ -81,19 +91,31 @@ type ToolResultRecord struct {
 	Result    string
 }
 
+// SessionOptions holds optional metadata for a new session.
+type SessionOptions struct {
+	ReviewMode string
+	DiffFrom   string
+	DiffTo     string
+	DiffCommit string
+}
+
 // New creates a new SessionHistory with the given repo directory.
-func New(repoDir, gitBranch, model string) *SessionHistory {
+func New(repoDir, gitBranch, model string, opts SessionOptions) *SessionHistory {
 	sessionID := generateUUID()
 	sh := &SessionHistory{
 		SessionID:    sessionID,
 		RepoDir:      repoDir,
 		GitBranch:    gitBranch,
 		Model:        model,
+		ReviewMode:   opts.ReviewMode,
+		DiffFrom:     opts.DiffFrom,
+		DiffTo:       opts.DiffTo,
+		DiffCommit:   opts.DiffCommit,
 		StartTime:    time.Now(),
 		FileSessions: make(map[string]*FileSession),
 	}
 
-	p, err := newJSONLWriter(sessionID, repoDir, gitBranch, model)
+	p, err := newJSONLWriter(sessionID, repoDir, gitBranch, model, opts)
 	if err != nil {
 		fmt.Printf("[ocr session] warning: failed to create session writer: %v\n", err)
 	} else {

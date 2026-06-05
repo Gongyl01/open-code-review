@@ -56,6 +56,10 @@ type Args struct {
 	// Commit is a single commit hash to review (vs its parent).
 	Commit string
 
+	// ReviewMode is one of "workspace", "range", or "commit".
+	// When empty, it is derived from From/To/Commit at session creation time.
+	ReviewMode string
+
 	// Template loaded from YAML config file.
 	Template template.Template
 
@@ -230,7 +234,16 @@ func New(args Args) *Agent {
 	}
 	if args.Session == nil {
 		gitBranch := detectGitBranch(args.RepoDir)
-		args.Session = session.New(args.RepoDir, gitBranch, args.Model)
+		mode := args.ReviewMode
+		if mode == "" {
+			mode = reviewModeString(args.From, args.To, args.Commit)
+		}
+		args.Session = session.New(args.RepoDir, gitBranch, args.Model, session.SessionOptions{
+			ReviewMode: mode,
+			DiffFrom:   args.From,
+			DiffTo:     args.To,
+			DiffCommit: args.Commit,
+		})
 	}
 	return &Agent{
 		args:    args,
@@ -1300,6 +1313,16 @@ func buildMessageXML(msgs []llm.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+func reviewModeString(from, to, commit string) string {
+	if commit != "" {
+		return session.ReviewModeCommit
+	}
+	if from != "" && to != "" {
+		return session.ReviewModeRange
+	}
+	return session.ReviewModeWorkspace
 }
 
 // detectGitBranch returns the current git branch name for the given repo, or empty string on failure.

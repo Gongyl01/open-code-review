@@ -154,7 +154,7 @@ func TestSetErrorIncrementsCounter(t *testing.T) {
 
 func TestSetErrorWritesJSONL(t *testing.T) {
 	repoDir := t.TempDir()
-	sh := New(repoDir, "main", "test-model")
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
 	defer sh.Finalize()
 
 	fs := sh.GetOrCreateFileSession("foo.go")
@@ -193,7 +193,7 @@ func TestSetErrorWritesJSONL(t *testing.T) {
 
 func TestSessionEndIncludesFailures(t *testing.T) {
 	repoDir := t.TempDir()
-	sh := New(repoDir, "main", "test-model")
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
 
 	fs := sh.GetOrCreateFileSession("bar.go")
 	for i := 0; i < 3; i++ {

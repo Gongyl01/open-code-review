@@ -80,6 +80,10 @@ type SessionSummary struct {
 	CWD           string
 	GitBranch     string
 	Model         string
+	ReviewMode    string
+	DiffFrom      string
+	DiffTo        string
+	DiffCommit    string
 	FilesReviewed []string
 	DurationSec   float64
 	FileCount     int
@@ -148,6 +152,18 @@ func peekSession(path string) (SessionSummary, error) {
 			}
 			if model, ok := rec["model"].(string); ok {
 				summary.Model = model
+			}
+			if rm, ok := rec["reviewMode"].(string); ok {
+				summary.ReviewMode = rm
+			}
+			if v, ok := rec["diffFrom"].(string); ok {
+				summary.DiffFrom = v
+			}
+			if v, ok := rec["diffTo"].(string); ok {
+				summary.DiffTo = v
+			}
+			if v, ok := rec["diffCommit"].(string); ok {
+				summary.DiffCommit = v
 			}
 		}
 	}
@@ -273,6 +289,18 @@ func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
 			}
 			if model, ok := rec["model"].(string); ok {
 				vs.Summary.Model = model
+			}
+			if rm, ok := rec["reviewMode"].(string); ok {
+				vs.Summary.ReviewMode = rm
+			}
+			if v, ok := rec["diffFrom"].(string); ok {
+				vs.Summary.DiffFrom = v
+			}
+			if v, ok := rec["diffTo"].(string); ok {
+				vs.Summary.DiffTo = v
+			}
+			if v, ok := rec["diffCommit"].(string); ok {
+				vs.Summary.DiffCommit = v
 			}
 
 		case "llm_request":
