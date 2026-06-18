@@ -24,6 +24,22 @@ It reads Git diffs, sends changed files to a configurable LLM via an agent with 
 
 ![Highlights](imgs/highlights-en.png)
 
+## Benchmark
+
+> Compared to general-purpose agents (Claude Code), Open Code Review achieves significantly higher **Precision** and **F1** with the same underlying model, while consuming only **~1/9 of the tokens** and completing reviews faster. Note that its Recall is lower than general-purpose agents — a deliberate trade-off favoring precision over noise.
+
+A real-world code review benchmark built from **50** popular open-source repositories, **200** real Pull Requests, and **10** programming languages — cross-validated by 80+ senior engineers (**1,505** annotated ground-truth issues).
+
+| Metric | What it measures | Why it matters |
+|--------|-----------------|----------------|
+| **F1** | Harmonic mean of precision and recall | Best single number for overall review quality |
+| **Precision** | % of reported issues that are real defects | Higher = fewer false alarms to triage |
+| **Recall** | % of real defects that are found | Higher = fewer issues slip through review |
+| **Avg Time** | Wall-clock time per review | Matters for CI pipeline latency |
+| **Avg Token** | Total tokens consumed per review | Directly impacts API cost |
+
+![Benchmark](imgs/benchmark-en.png)
+
 ## Why Open Code Review?
 
 ### The Problem with General-Purpose Agents
