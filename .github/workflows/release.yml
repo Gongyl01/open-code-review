@@ -73,6 +73,7 @@ jobs:
 
       - name: Generate release notes from commits
         id: notes
+        shell: bash
         run: |
           CURRENT_TAG="${GITHUB_REF_NAME}"
           PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
