@@ -69,3 +69,12 @@ func TestShutdownWithTimeout(t *testing.T) {
 		t.Error("expected shutdown function to be called via ShutdownWithTimeout")
 	}
 }
+
+func TestShutdownWithTimeout_Error(t *testing.T) {
+	shutdownFuncs = []func(context.Context) error{
+		func(ctx context.Context) error { return errors.New("shutdown fail") },
+	}
+	defer func() { shutdownFuncs = nil }()
+
+	ShutdownWithTimeout(context.Background(), 5*time.Second)
+}

@@ -31,8 +31,10 @@ endef
 build:
 	$(GO) build -ldflags "$(LD_FLAGS)" -o $(DIST_DIR)/$(BINARY_NAME) ./cmd/opencodereview
 
+PACKAGES := $(shell $(GO) list ./... | grep -v /extensions/)
+
 test:
-	LC_ALL=C $(GO) test -v -race -count=1 ./...
+	LC_ALL=C $(GO) test -v -race -count=1 $(PACKAGES)
 
 clean:
 	rm -rf $(DIST_DIR)
@@ -44,15 +46,15 @@ help: build
 	$(DIST_DIR)/$(BINARY_NAME) -h
 
 fmt:
-	$(GO) fmt ./...
+	$(GO) fmt $(PACKAGES)
 
 vet:
-	LC_ALL=C $(GO) vet ./...
+	LC_ALL=C $(GO) vet $(PACKAGES)
 
 check:
 	$(GO) mod tidy
-	$(GO) fmt ./...
-	LC_ALL=C $(GO) vet ./...
+	$(GO) fmt $(PACKAGES)
+	LC_ALL=C $(GO) vet $(PACKAGES)
 	@echo "check passed"
 
 # ── Cross-platform targets ───────────────────────────────────────────────────

@@ -24,7 +24,39 @@ func TestRecordFunctions_DisabledTelemetry(t *testing.T) {
 }
 
 func TestCheckMetricErr(t *testing.T) {
-	// Should not panic
 	checkMetricErr(nil)
 	checkMetricErr(fmt.Errorf("some error"))
+}
+
+func TestRecordFunctions_EnabledTelemetry(t *testing.T) {
+	setupEnabledTelemetry(t)
+	ctx := context.Background()
+
+	RecordReviewDuration(ctx, 5*time.Second)
+	RecordFilesReviewed(ctx, 10)
+	RecordCommentsGenerated(ctx, 3)
+	RecordLLMRequest(ctx, "gpt-4", 2*time.Second, 1000, "ok")
+	RecordLLMRequest(ctx, "gpt-4", 1*time.Second, 0, "error")
+	RecordToolCall(ctx, "file_read", 100*time.Millisecond, true)
+	RecordToolCall(ctx, "file_read", 200*time.Millisecond, false)
+}
+
+func TestEnsureMetrics_Idempotent(t *testing.T) {
+	setupEnabledTelemetry(t)
+	ensureMetrics()
+	ensureMetrics()
+	if mReviewDuration == nil {
+		t.Error("expected mReviewDuration to be initialized")
+	}
+	if mFilesReviewed == nil {
+		t.Error("expected mFilesReviewed to be initialized")
+	}
+}
+
+func TestGetMeter(t *testing.T) {
+	setupEnabledTelemetry(t)
+	m := getMeter()
+	if m == nil {
+		t.Error("expected non-nil meter")
+	}
 }
