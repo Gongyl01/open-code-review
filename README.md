@@ -667,12 +667,14 @@ Config file: `~/.opencodereview/config.json`
 | `providers.<name>.models` | array | Optional provider model list for interactive selection |
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
 | `providers.<name>.extra_body` | object | JSON object merged into every request body |
+| `providers.<name>.timeout_sec` | integer | Per-request HTTP timeout in seconds (default: `300`) |
 | `providers.<name>.extra_headers` | string | Comma-separated `key=value` HTTP headers |
 | `custom_providers.<name>.*` | — | Same fields as `providers.<name>.*`, including optional `models` |
 | `llm.url` | string | `https://api.openai.com/v1/chat/completions` |
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.auth_header` | string | Anthropic only: `x-api-key` \| `authorization` |
 | `llm.extra_body` | object | JSON object merged into every request body |
+| `llm.timeout_sec` | integer | Per-request HTTP timeout in seconds (default: `300`) |
 | `llm.extra_headers` | string | Comma-separated `key=value` HTTP headers |
 | `llm.model` | string | `claude-opus-4-6` |
 | `llm.use_anthropic` | boolean | `true` \| `false` |
@@ -693,6 +695,7 @@ Environment variables take precedence over the config file.
 | `OCR_LLM_AUTH_HEADER` | Anthropic auth header (`x-api-key` or `authorization`) |
 | `OCR_LLM_EXTRA_HEADERS` | Comma-separated `key=value` HTTP headers |
 | `OCR_LLM_MODEL` | Model name |
+| `OCR_LLM_TIMEOUT` | Per-request HTTP timeout in seconds (overrides config file `timeout_sec`) |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
 
 

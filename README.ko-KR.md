@@ -620,12 +620,14 @@ Config file: `~/.opencodereview/config.json`
 | `providers.<name>.models` | array | 대화형 선택에 사용할 optional provider model 목록 |
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
 | `providers.<name>.extra_body` | object | 모든 요청 본문에 병합되는 JSON 객체 |
+| `providers.<name>.timeout_sec` | integer | 요청당 HTTP timeout(초), 기본값 `300` |
 | `providers.<name>.extra_headers` | string | 쉼표로 구분된 `key=value` HTTP 헤더 |
 | `custom_providers.<name>.*` | — | optional `models`를 포함한 `providers.<name>.*`과 동일한 필드 |
 | `llm.url` | string | `https://api.openai.com/v1/chat/completions` |
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.auth_header` | string | Anthropic only: `x-api-key` \| `authorization` |
 | `llm.extra_body` | object | 모든 요청 본문에 병합되는 JSON 객체 |
+| `llm.timeout_sec` | integer | 요청당 HTTP timeout(초), 기본값 `300` |
 | `llm.extra_headers` | string | 쉼표로 구분된 `key=value` HTTP 헤더 |
 | `llm.model` | string | `claude-opus-4-6` |
 | `llm.use_anthropic` | boolean | `true` \| `false` |
@@ -646,6 +648,7 @@ Config file: `~/.opencodereview/config.json`
 | `OCR_LLM_AUTH_HEADER` | Anthropic auth header (`x-api-key` 또는 `authorization`) |
 | `OCR_LLM_EXTRA_HEADERS` | 쉼표로 구분된 `key=value` HTTP 헤더 |
 | `OCR_LLM_MODEL` | Model name |
+| `OCR_LLM_TIMEOUT` | 요청당 HTTP timeout(초), config file의 `timeout_sec`를 override |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
 
 ## Telemetry
