@@ -8,6 +8,17 @@ import docDownloadIcon from '../assets/icons/doc-download.svg';
 import docCheckCircleIcon from '../assets/icons/doc-check-circle.svg';
 import docEditIcon from '../assets/icons/doc-edit.svg';
 import docContentsIcon from '../assets/icons/doc-contents.svg';
+import {
+  SparkContrastView2Line,
+  SparkHistoryLine,
+  SparkDocumentLine,
+  SparkCode02Line,
+  SparkAgentLine,
+  SparkVisibleLine,
+  SparkScanLine,
+  SparkTargetLine,
+  SparkFileCodeLine,
+} from '@agentscope-ai/icons';
 
 /* Toast - same as QuickStartSection */
 const Toast: React.FC<{ message: string; visible: boolean }> = ({ message, visible }) =>
@@ -84,6 +95,13 @@ const CodeBlock: React.FC<{ code: string; onCopy?: () => void }> = ({ code, onCo
 const IconBox: React.FC<{ icon: string }> = ({ icon }) => (
   <div style={{ width: 32, height: 32, display: 'flex', flex: 'none', justifyContent: 'center', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 6 }}>
     <img src={icon} alt="" style={{ width: 16, height: 16 }} />
+  </div>
+);
+
+/* ─── Spark Icon box (same style, wraps React icon component) ─── */
+const SparkIconBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div style={{ width: 32, height: 32, display: 'flex', flex: 'none', justifyContent: 'center', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 6, color: 'rgba(255,255,255,0.8)' }}>
+    {children}
   </div>
 );
 
@@ -306,7 +324,7 @@ const DocsPage: React.FC = () => {
               {/* Branch Diff Mode */}
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkContrastView2Line size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewBranch')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewBranchDesc')}</p>
@@ -317,7 +335,7 @@ const DocsPage: React.FC = () => {
               {/* Single Commit Mode */}
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkHistoryLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewCommit')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewCommitDesc')}</p>
@@ -330,7 +348,7 @@ const DocsPage: React.FC = () => {
               {/* Review with Requirement Context */}
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docEditIcon} />
+                  <SparkIconBox><SparkDocumentLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewBackground')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewBackgroundDesc')}</p>
@@ -341,7 +359,7 @@ const DocsPage: React.FC = () => {
               {/* JSON Output */}
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkCode02Line size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewJson')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewJsonDesc')}</p>
@@ -352,7 +370,7 @@ const DocsPage: React.FC = () => {
               {/* Agent Mode */}
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkAgentLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewAgent')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewAgentDesc')}</p>
@@ -363,7 +381,7 @@ const DocsPage: React.FC = () => {
               {/* Dry-Run Preview */}
               <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docCheckCircleIcon} />
+                  <SparkIconBox><SparkVisibleLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.reviewPreviewLabel')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.reviewPreviewDesc')}</p>
@@ -420,7 +438,7 @@ const DocsPage: React.FC = () => {
               <p style={subTitle}>{t('docs.scanVsTitle')}</p>
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                  <IconBox icon={docEditIcon} />
+                  <SparkIconBox><SparkContrastView2Line size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanVsReviewLabel')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanVsReview').replace(/<\/?code>/g, '')}</p>
@@ -429,7 +447,7 @@ const DocsPage: React.FC = () => {
               </div>
               <div style={{ marginBottom: 24, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkScanLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanVsScanLabel')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanVsScan').replace(/<\/?code>/g, '')}</p>
@@ -440,7 +458,7 @@ const DocsPage: React.FC = () => {
               <p style={subTitle}>{t('docs.scanUsage')}</p>
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docDownloadIcon} />
+                  <SparkIconBox><SparkScanLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsageWhole')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsageWholeDesc')}</p>
@@ -450,7 +468,7 @@ const DocsPage: React.FC = () => {
               </div>
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docEditIcon} />
+                  <SparkIconBox><SparkTargetLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsagePath')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsagePathDesc')}</p>
@@ -460,7 +478,7 @@ const DocsPage: React.FC = () => {
               </div>
               <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docEditIcon} />
+                  <SparkIconBox><SparkFileCodeLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsageFile')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsageFileDesc')}</p>
@@ -470,7 +488,7 @@ const DocsPage: React.FC = () => {
               </div>
               <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <IconBox icon={docCheckCircleIcon} />
+                  <SparkIconBox><SparkVisibleLine size={16} /></SparkIconBox>
                   <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
                     <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsagePreviewLabel')}</span>
                     <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsagePreviewDesc')}</p>
