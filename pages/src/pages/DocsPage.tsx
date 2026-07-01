@@ -47,6 +47,7 @@ const sectionDefs: Section[] = [
   { id: 'install', labelKey: 'docs.install' },
   { id: 'config', labelKey: 'docs.config' },
   { id: 'review', labelKey: 'docs.review' },
+  { id: 'scan', labelKey: 'docs.scan' },
   { id: 'viewer', labelKey: 'docs.viewer' },
   { id: 'env', labelKey: 'docs.env' },
 ];
@@ -82,7 +83,7 @@ const CodeBlock: React.FC<{ code: string; onCopy?: () => void }> = ({ code, onCo
 /* ─── Icon box (32x32, rgba(255,255,255,0.04) bg, rounded 6px) ─── */
 const IconBox: React.FC<{ icon: string }> = ({ icon }) => (
   <div style={{ width: 32, height: 32, display: 'flex', flex: 'none', justifyContent: 'center', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 6 }}>
-    <img src={icon} style={{ width: 16, height: 16 }} />
+    <img src={icon} alt="" style={{ width: 16, height: 16 }} />
   </div>
 );
 
@@ -117,7 +118,11 @@ const DocsPage: React.FC = () => {
     textarea.select();
     const success = document.execCommand('copy');
     document.body.removeChild(textarea);
-    if (success) setToastVisible(true);
+    if (success) {
+      setToastVisible(true);
+    } else {
+      console.warn('[DocsPage] copy to clipboard failed');
+    }
   };
 
   useEffect(() => {
@@ -393,6 +398,160 @@ const DocsPage: React.FC = () => {
               </div>
               <p style={{ ...desc, marginTop: 16, fontSize: 12 }}>
                 {t('docs.reviewNote').replace(/<\/?code>/g, '')}
+              </p>
+            </section>
+
+            {/* ─── ocr scan ─── */}
+            <section id="scan" style={{ ...sectionSpacing, scrollMarginTop: 100 }}>
+              <p style={sectionTitle}>{t('docs.scanTitle')}</p>
+              <p style={desc}>{t('docs.scanDesc').replace(/<\/?code>/g, '')}</p>
+
+              <p style={subTitle}>{t('docs.scanVsTitle')}</p>
+              <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <IconBox icon={docEditIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanVsReviewLabel')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanVsReview').replace(/<\/?code>/g, '')}</p>
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginBottom: 24, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <IconBox icon={docDownloadIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanVsScanLabel')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanVsScan').replace(/<\/?code>/g, '')}</p>
+                  </div>
+                </div>
+              </div>
+
+              <p style={subTitle}>{t('docs.scanUsage')}</p>
+              <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <IconBox icon={docDownloadIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsageWhole')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsageWholeDesc')}</p>
+                  </div>
+                </div>
+                <CodeBlock code="ocr scan" onCopy={() => handleCopy('ocr scan')} />
+              </div>
+              <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <IconBox icon={docEditIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsagePath')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsagePathDesc')}</p>
+                  </div>
+                </div>
+                <CodeBlock code="ocr scan --path internal/agent" onCopy={() => handleCopy('ocr scan --path internal/agent')} />
+              </div>
+              <div style={{ marginBottom: 12, background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <IconBox icon={docEditIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsageFile')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsageFileDesc')}</p>
+                  </div>
+                </div>
+                <CodeBlock code="ocr scan --path internal/agent/agent.go,internal/diff/scan.go" onCopy={() => handleCopy('ocr scan --path internal/agent/agent.go,internal/diff/scan.go')} />
+              </div>
+              <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: 16, border: '1px solid rgba(255,255,255,0.16)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <IconBox icon={docCheckCircleIcon} />
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column' }}>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: '#FFFFFF' }}>{t('docs.scanUsagePreviewLabel')}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: '20px' }}>{t('docs.scanUsagePreviewDesc')}</p>
+                  </div>
+                </div>
+                <CodeBlock code="ocr scan --preview" onCopy={() => handleCopy('ocr scan --preview')} />
+              </div>
+
+              <p style={subTitle}>{t('docs.scanPreview')}</p>
+              <p style={desc}>{t('docs.scanPreviewDesc').replace(/<\/?code>/g, '')}</p>
+              <CodeBlock code="ocr scan --preview" onCopy={() => handleCopy('ocr scan --preview')} />
+
+              <p style={subTitle}>{t('docs.scanBatching')}</p>
+              <p style={desc}>{t('docs.scanBatchingDesc').replace(/<\/?code>/g, '')}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
+                {[
+                  [t('docs.scanBatchingNone'), t('docs.scanBatchingNoneDesc')],
+                  [t('docs.scanBatchingLang'), t('docs.scanBatchingLangDesc')],
+                  [t('docs.scanBatchingDir'), t('docs.scanBatchingDirDesc')],
+                ].map(([name, d]) => (
+                  <div key={name} style={{ display: 'flex', alignSelf: 'stretch', justifyContent: 'space-between', alignItems: 'center', background: '#000000', borderRadius: 6, padding: '4px 16px', border: '1px solid rgba(255,255,255,0.16)' }}>
+                    <p style={{ margin: 0, fontSize: 13, fontFamily: 'Menlo, monospace', color: 'rgba(255,255,255,0.8)' }}>
+                      <span style={{ color: '#2BDE5E' }}>{name}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.4)', marginLeft: 12 }}>{d}</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <CodeBlock code="ocr scan --batch by-directory" onCopy={() => handleCopy('ocr scan --batch by-directory')} />
+
+              <p style={subTitle}>{t('docs.scanToggles')}</p>
+              <p style={desc}>{t('docs.scanTogglesDesc')}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
+                {[
+                  ['--no-plan', t('docs.scanTogglesPlanDesc')],
+                  ['--no-dedup', t('docs.scanTogglesDedupDesc')],
+                  ['--no-summary', t('docs.scanTogglesSummaryDesc')],
+                ].map(([flag, d]) => (
+                  <div key={flag} style={{ display: 'flex', alignSelf: 'stretch', justifyContent: 'flex-start', alignItems: 'center', background: '#000000', borderRadius: 6, padding: '8px 16px', border: '1px solid rgba(255,255,255,0.16)' }}>
+                    <span style={{ fontSize: 13, fontFamily: 'Menlo, monospace', color: '#2BDE5E', flexShrink: 0, marginRight: 12 }}>{flag}</span>
+                    <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', lineHeight: '20px' }}>{d}</span>
+                  </div>
+                ))}
+              </div>
+              <CodeBlock code="ocr scan --no-plan --no-dedup --no-summary" onCopy={() => handleCopy('ocr scan --no-plan --no-dedup --no-summary')} />
+
+              <p style={subTitle}>{t('docs.scanBudget')}</p>
+              <p style={desc}>{t('docs.scanBudgetDesc').replace(/<\/?code>/g, '')}</p>
+              <CodeBlock code="ocr scan --max-tokens-budget 500000" onCopy={() => handleCopy('ocr scan --max-tokens-budget 500000')} />
+
+              <p style={subTitle}>{t('docs.scanFlags')}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', borderRadius: 8, border: '1px solid rgba(255,255,255,0.16)', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.16)' }}>
+                  <div style={{ width: 160, flexShrink: 0, padding: '10px 12px' }}><span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.6)' }}>{t('docs.scanFlagCol1')}</span></div>
+                  <div style={{ flex: 1, padding: '10px 12px' }}><span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.6)' }}>{t('docs.scanFlagCol2')}</span></div>
+                  <div style={{ width: 120, flexShrink: 0, padding: '10px 12px' }}><span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.6)' }}>{t('docs.scanFlagCol3')}</span></div>
+                </div>
+                {[
+                  ['--path', t('docs.scanFlag1Desc'), t('docs.scanFlag1Default')],
+                  ['--exclude', t('docs.scanFlag2Desc'), '—'],
+                  ['-p, --preview', t('docs.scanFlag3Desc'), 'false'],
+                  ['--max-tokens-budget', t('docs.scanFlag4Desc'), '0'],
+                  ['--no-plan', t('docs.scanFlag5Desc'), 'false'],
+                  ['--no-dedup', t('docs.scanFlag6Desc'), 'false'],
+                  ['--no-summary', t('docs.scanFlag7Desc'), 'false'],
+                  ['--batch', t('docs.scanFlag8Desc'), 'by-language'],
+                  ['-f, --format', t('docs.scanFlag9Desc'), 'text'],
+                  ['--concurrency', t('docs.scanFlag10Desc'), '8'],
+                  ['--timeout', t('docs.scanFlag11Desc'), '10'],
+                  ['--audience', t('docs.scanFlag12Desc'), 'human'],
+                  ['-b, --background', t('docs.scanFlag13Desc'), '—'],
+                  ['--max-tools', t('docs.scanFlag14Desc'), t('docs.scanFlag14Default')],
+                  ['--max-git-procs', t('docs.scanFlag15Desc'), '16'],
+                  ['--rule', t('docs.scanFlag16Desc'), '—'],
+                  ['--tools', t('docs.scanFlag17Desc'), t('docs.scanFlag17Default')],
+                  ['--repo', t('docs.scanFlag18Desc'), t('docs.scanFlag18Default')],
+                ].map(([flag, d, def], idx, arr) => (
+                  <div key={idx} style={{ display: 'flex', borderBottom: idx < arr.length - 1 ? '1px solid rgba(255,255,255,0.16)' : 'none' }}>
+                    <div style={{ width: 160, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '10px 12px' }}>
+                      <span style={{ fontSize: 12, fontFamily: 'Menlo, monospace', color: 'rgba(255,255,255,0.7)' }}>{flag}</span>
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '10px 12px' }}>
+                      <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>{d}</span>
+                    </div>
+                    <div style={{ width: 120, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '10px 12px' }}>
+                      <span style={{ fontSize: 12, fontFamily: 'Menlo, monospace', color: 'rgba(255,255,255,0.5)' }}>{def}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ ...desc, marginTop: 16, fontSize: 12 }}>
+                {t('docs.scanNote').replace(/<\/?code>/g, '')}
               </p>
             </section>
 
