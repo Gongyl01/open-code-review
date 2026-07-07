@@ -115,23 +115,13 @@ func runReview(args []string) error {
 	return emitRunResult(ctx, ag, comments, startTime, opts.outputFormat, opts.audience, q)
 }
 
+// resolveRepoDir resolves the repo dir for `ocr rules check`. It delegates to
+// resolveWorkingDir(requireGit=true) so it anchors at the git top-level just
+// like the review path — keeping rule resolution consistent when run from a
+// monorepo subdirectory (#287).
 func resolveRepoDir(input string) (string, error) {
-	if input == "" {
-		var err error
-		input, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("get working directory: %w", err)
-		}
-	}
-	absPath, err := filepath.Abs(input)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute path: %w", err)
-	}
-	out, err := runGitCmd(absPath, "rev-parse", "--git-dir")
-	if err != nil || len(out) == 0 {
-		return "", fmt.Errorf("%s is not a git repository", absPath)
-	}
-	return absPath, nil
+	absPath, _, err := resolveWorkingDir(input, true)
+	return absPath, err
 }
 
 // requireGitRepo validates that the given directory is part of a git repository.

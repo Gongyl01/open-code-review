@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/open-code-review/open-code-review/internal/agent"
@@ -99,6 +100,25 @@ func resolveWorkingDir(input string, requireGit bool) (string, bool, error) {
 	isGit := err == nil && len(out) > 0
 	if !isGit && requireGit {
 		return "", false, fmt.Errorf("%s is not a git repository", absPath)
+	}
+	// #287: git reports diff and `git show HEAD:<path>` paths relative to the
+	// repository root, not the current directory. When `ocr review` runs from a
+	// subdirectory of a monorepo, anchor RepoDir at the git top-level so those
+	// root-relative paths resolve for both disk reads and git-show reads.
+	// requireGit is true only for the review path; scan (requireGit=false) keeps
+	// the CWD so its `git ls-files` walk stays scoped to the subdirectory.
+	if isGit && requireGit {
+		// runGitCmdStdout captures stdout only so git stderr notices can't
+		// pollute the resolved path. --show-toplevel fails (or is empty) when
+		// there is no work tree — e.g. a bare repo, where --git-dir succeeds so
+		// isGit is true. Fail loudly there instead of silently reusing the
+		// subdir, which would reproduce the #287 root-relative-path bug.
+		top, topErr := runGitCmdStdout(absPath, "rev-parse", "--show-toplevel")
+		t := strings.TrimSpace(string(top))
+		if topErr != nil || t == "" {
+			return "", false, fmt.Errorf("%s is a git repository without a work tree (bare repo?); cannot resolve its top level for review", absPath)
+		}
+		absPath = t
 	}
 	return absPath, isGit, nil
 }
