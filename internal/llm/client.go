@@ -1,5 +1,8 @@
 // Package llm provides LLM client interfaces supporting multiple protocols.
-// Supported protocols: Anthropic Messages API, OpenAI Chat Completions API.
+// Supported protocols (canonical names, see protocol.go):
+//   - "anthropic" — Anthropic Messages API
+//   - "openai" — OpenAI Chat Completions API
+//   - "openai-responses" — OpenAI Responses API
 package llm
 
 import (
@@ -191,7 +194,14 @@ type ClientConfig struct {
 // --- Factory ---
 
 // NewLLMClient creates the appropriate client based on the resolved endpoint protocol.
-// protocol: "anthropic" -> AnthropicClient, anything else -> OpenAIClient.
+// protocol dispatch (canonical names from protocol.go):
+//   - ProtocolAnthropic ("anthropic") -> AnthropicClient
+//   - ProtocolOpenAIResponses ("openai-responses") -> OpenAIResponsesClient
+//   - ProtocolOpenAIChatCompletions ("openai") or anything else -> OpenAIClient
+//
+// The defensive default keeps legacy callers that somehow bypass resolver
+// normalization working (they previously got OpenAIClient for any non-anthropic
+// protocol).
 func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 	cfg := ClientConfig{
 		URL:          ep.URL,
@@ -202,10 +212,14 @@ func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 		ExtraBody:    ep.ExtraBody,
 		ExtraHeaders: ep.ExtraHeaders,
 	}
-	if ep.Protocol == "anthropic" {
+	switch ep.Protocol {
+	case ProtocolAnthropic:
 		return NewAnthropicClient(cfg)
+	case ProtocolOpenAIResponses:
+		return NewOpenAIResponsesClient(cfg)
+	default:
+		return NewOpenAIClient(cfg)
 	}
-	return NewOpenAIClient(cfg)
 }
 
 // --- Token counting with tiktoken ---
@@ -318,6 +332,7 @@ type ChatRequest struct {
 	Tools       []ToolDef `json:"tools,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	SessionID   string    `json:"-"` // per-file agent loop session ID; used as prompt_cache_key by the Responses API client
 }
 
 // CompletionsWithCtx sends a chat completion request with context support for cancellation and timeout.

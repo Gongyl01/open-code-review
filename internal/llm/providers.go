@@ -6,10 +6,18 @@ import (
 )
 
 // Provider holds the preset configuration for a known LLM provider.
+//
+// Protocol uses the canonical names defined in protocol.go:
+//   - ProtocolAnthropic ("anthropic")
+//   - ProtocolOpenAIChatCompletions ("openai")
+//   - ProtocolOpenAIResponses ("openai-responses")
+//
+// To add a built-in provider that speaks a different protocol, set Protocol
+// accordingly and ensure NewLLMClient has a matching case.
 type Provider struct {
 	Name        string
 	DisplayName string
-	Protocol    string // "anthropic" or "openai"
+	Protocol    string
 	BaseURL     string
 	AuthHeader  string // Anthropic-only; empty for OpenAI-compatible
 	EnvVar      string // environment variable name for API key fallback
@@ -20,7 +28,7 @@ var registry = []Provider{
 	{
 		Name:        "anthropic",
 		DisplayName: "Anthropic Claude API",
-		Protocol:    "anthropic",
+		Protocol:    ProtocolAnthropic,
 		BaseURL:     "https://api.anthropic.com",
 		AuthHeader:  "x-api-key",
 		EnvVar:      "ANTHROPIC_API_KEY",
@@ -34,7 +42,7 @@ var registry = []Provider{
 	{
 		Name:        "openai",
 		DisplayName: "OpenAI API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.openai.com/v1",
 		EnvVar:      "OPENAI_API_KEY",
 		Models: []string{
@@ -46,7 +54,7 @@ var registry = []Provider{
 	{
 		Name:        "edenai",
 		DisplayName: "Eden AI",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.edenai.run/v3",
 		EnvVar:      "EDENAI_API_KEY",
 		Models: []string{
@@ -65,7 +73,7 @@ var registry = []Provider{
 	{
 		Name:        "dashscope",
 		DisplayName: "Alibaba DashScope API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		EnvVar:      "DASHSCOPE_API_KEY",
 		Models: []string{
@@ -83,7 +91,7 @@ var registry = []Provider{
 	{
 		Name:        "dashscope-tokenplan",
 		DisplayName: "Alibaba DashScope Token Plan API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 		EnvVar:      "DASHSCOPE_TOKENPLAN_KEY",
 		Models: []string{
@@ -105,7 +113,7 @@ var registry = []Provider{
 	{
 		Name:        "volcengine",
 		DisplayName: "Volcano Engine Ark API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://ark.cn-beijing.volces.com/api/v3",
 		EnvVar:      "ARK_API_KEY",
 		Models: []string{
@@ -120,7 +128,7 @@ var registry = []Provider{
 	{
 		Name:        "deepseek",
 		DisplayName: "DeepSeek API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.deepseek.com",
 		EnvVar:      "DEEPSEEK_API_KEY",
 		Models: []string{
@@ -131,7 +139,7 @@ var registry = []Provider{
 	{
 		Name:        "tencent-tokenhub",
 		DisplayName: "Tencent TokenHub API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://tokenhub.tencentmaas.com/v1",
 		EnvVar:      "TENCENT_TOKENHUB_API_KEY",
 		Models: []string{
@@ -153,7 +161,7 @@ var registry = []Provider{
 	{
 		Name:        "hy-tokenplan",
 		DisplayName: "Tencent Hunyuan Token Plan API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.lkeap.cloud.tencent.com/plan/v3",
 		EnvVar:      "TENCENT_HUNYUAN_TOKENPLAN_KEY",
 		Models: []string{
@@ -163,7 +171,7 @@ var registry = []Provider{
 	{
 		Name:        "kimi",
 		DisplayName: "Kimi Moonshot API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.moonshot.cn/v1",
 		EnvVar:      "MOONSHOT_API_KEY",
 		Models: []string{
@@ -176,7 +184,7 @@ var registry = []Provider{
 	{
 		Name:        "z-ai",
 		DisplayName: "Z.AI API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://open.bigmodel.cn/api/paas/v4",
 		EnvVar:      "Z_AI_API_KEY",
 		Models: []string{
@@ -190,7 +198,7 @@ var registry = []Provider{
 	{
 		Name:        "z-ai-coding",
 		DisplayName: "Z.AI Coding Plan API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://open.bigmodel.cn/api/coding/paas/v4",
 		EnvVar:      "Z_AI_CODING_API_KEY",
 		Models: []string{
@@ -203,7 +211,7 @@ var registry = []Provider{
 	{
 		Name:        "mimo",
 		DisplayName: "Xiaomi MiMo API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.xiaomimimo.com/v1",
 		EnvVar:      "MIMO_API_KEY",
 		Models: []string{
@@ -214,7 +222,7 @@ var registry = []Provider{
 	{
 		Name:        "minimax",
 		DisplayName: "MiniMax API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://api.minimaxi.com/v1",
 		EnvVar:      "MINIMAX_API_KEY",
 		Models: []string{
@@ -228,7 +236,7 @@ var registry = []Provider{
 	{
 		Name:        "baidu-qianfan",
 		DisplayName: "Baidu Qianfan API",
-		Protocol:    "openai",
+		Protocol:    ProtocolOpenAIChatCompletions,
 		BaseURL:     "https://qianfan.baidubce.com/v2",
 		EnvVar:      "QIANFAN_API_KEY",
 		Models: []string{

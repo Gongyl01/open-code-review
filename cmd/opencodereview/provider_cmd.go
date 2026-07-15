@@ -113,8 +113,22 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 		return fmt.Errorf("invalid auth_header: %w", err)
 	}
 	cfg.Llm.AuthHeader = authHeader
-	useAnthropic := result.protocol == "anthropic"
-	cfg.Llm.UseAnthropic = &useAnthropic
+	// Write the canonical protocol so resolver picks it up directly. Also
+	// mirror use_anthropic so configs read correctly on older binaries that
+	// predate llm.protocol: anthropic -> true, the OpenAI family (including
+	// openai-responses, which has no exact boolean equivalent) -> false, so
+	// older binaries pick the OpenAI auth header/endpoint instead of wrongly
+	// defaulting to anthropic.
+	protocol := llm.NormalizeProtocol(result.protocol)
+	cfg.Llm.Protocol = protocol
+	switch protocol {
+	case llm.ProtocolAnthropic:
+		t := true
+		cfg.Llm.UseAnthropic = &t
+	default:
+		f := false
+		cfg.Llm.UseAnthropic = &f
+	}
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -122,7 +136,7 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 
 	fmt.Println("\nManual configuration saved.")
 	fmt.Printf("URL: %s\n", result.url)
-	fmt.Printf("Protocol: %s\n", result.protocol)
+	fmt.Printf("Protocol: %s\n", protocol)
 	fmt.Printf("Model: %s\n", result.model)
 
 	fmt.Println("\nTesting connection...")

@@ -219,7 +219,7 @@ ocr config set custom_providers.my-gateway.api_key your-api-key-here
 ocr config set custom_providers.my-gateway.model gpt-4o
 ```
 
-> `url` and `protocol` are required for custom providers. Supported protocols: `anthropic`, `openai`.
+> `url` and `protocol` are required for custom providers. Supported protocols: `anthropic`, `openai`, `openai-responses`.
 
 Optional settings:
 
@@ -252,6 +252,17 @@ export OCR_LLM_TOKEN=your-api-key-here
 export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
+
+To use the OpenAI Responses API (GPT-5.x / o-series), set `OCR_LLM_PROTOCOL` instead of `OCR_USE_ANTHROPIC`:
+
+```bash
+export OCR_LLM_URL=https://api.openai.com/v1
+export OCR_LLM_TOKEN=your-openai-key
+export OCR_LLM_MODEL=gpt-5.4
+export OCR_LLM_PROTOCOL=openai-responses
+```
+
+`OCR_LLM_PROTOCOL` accepts `anthropic`, `openai`, `openai-responses`, and takes priority over `OCR_USE_ANTHROPIC` when both are set.
 
 Also compatible with Claude Code environment variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) and parses `~/.zshrc` / `~/.bashrc` for those exports.
 
@@ -759,7 +770,7 @@ Config file: `~/.opencodereview/config.json`
 | `provider` | string | `anthropic` \| `openai` \| `dashscope` \| `deepseek` \| `z-ai` |
 | `providers.<name>.api_key` | string | Provider-specific API key |
 | `providers.<name>.url` | string | Provider base URL override |
-| `providers.<name>.protocol` | string | `anthropic` \| `openai` |
+| `providers.<name>.protocol` | string | `anthropic` \| `openai` \| `openai-responses` |
 | `providers.<name>.model` | string | Model name for the provider |
 | `providers.<name>.models` | array | Optional provider model list for interactive selection |
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
@@ -774,7 +785,8 @@ Config file: `~/.opencodereview/config.json`
 | `llm.timeout_sec` | integer | Per-request HTTP timeout in seconds (default: `300`) |
 | `llm.extra_headers` | string | Comma-separated `key=value` HTTP headers |
 | `llm.model` | string | `claude-opus-4-6` |
-| `llm.use_anthropic` | boolean | `true` \| `false` |
+| `llm.protocol` | string | `anthropic` \| `openai` \| `openai-responses`; takes priority over `llm.use_anthropic` |
+| `llm.use_anthropic` | boolean | `true` \| `false` (legacy; prefer `llm.protocol`) |
 | `mcp_servers.<name>.command` | string | Command to start the MCP server |
 | `mcp_servers.<name>.args` | array | Command-line arguments for the MCP server |
 | `mcp_servers.<name>.env` | array | Environment variables in `KEY=VALUE` format |
@@ -834,9 +846,9 @@ ocr config set mcp_servers.codegraph.setup 'codegraph init && codegraph index'
 | `OCR_LLM_AUTH_HEADER` | Anthropic auth header (`x-api-key` or `authorization`) |
 | `OCR_LLM_EXTRA_HEADERS` | Comma-separated `key=value` HTTP headers |
 | `OCR_LLM_MODEL` | Model name |
+| `OCR_LLM_PROTOCOL` | Protocol: `anthropic` \| `openai` \| `openai-responses`; takes priority over `OCR_USE_ANTHROPIC` |
 | `OCR_LLM_TIMEOUT` | Per-request HTTP timeout in seconds (overrides config file `timeout_sec`) |
-| `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI |
-
+| `OCR_USE_ANTHROPIC` | `true` = Anthropic, `false` = OpenAI Chat Completions (legacy; prefer `OCR_LLM_PROTOCOL`) |
 
 ## Telemetry
 

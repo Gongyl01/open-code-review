@@ -50,7 +50,15 @@ const (
 	manualStepAuthHeader
 )
 
-var cpProtocols = []string{"anthropic", "openai"}
+// cpProtocols lists the protocol options offered in the Custom and Manual
+// provider forms. Using the canonical names from protocol.go means whatever the
+// user picks flows through resolver normalization unchanged and is written to
+// config verbatim.
+var cpProtocols = []string{
+	llm.ProtocolAnthropic,
+	llm.ProtocolOpenAIChatCompletions,
+	llm.ProtocolOpenAIResponses,
+}
 
 type customProviderListItem struct {
 	name  string
@@ -164,6 +172,20 @@ type providerTUIModel struct {
 	deletedProviders      []string
 	confirmingDeleteModel bool
 	deleteModelName       string
+}
+
+// cpProtocolIndex maps a protocol string (canonical name or legacy alias) to
+// its index in cpProtocols. Unknown / empty values default to the OpenAI Chat
+// Completions entry (index 1) to preserve legacy behavior where any non-anthropic
+// protocol was treated as OpenAI.
+func cpProtocolIndex(protocol string) int {
+	normalized := llm.NormalizeProtocol(protocol)
+	for i, p := range cpProtocols {
+		if p == normalized {
+			return i
+		}
+	}
+	return 1
 }
 
 func (m providerTUIModel) customProviderNameTaken(name string) bool {
@@ -336,7 +358,12 @@ func newProviderTUI(cfg *Config, configPath string) providerTUIModel {
 			m.manualTokenMasked = true
 			m.manualTokenInput.SetValue(maskedSecretPlaceholder())
 		}
-		if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic {
+		// Manual tab protocol: prefer cfg.Llm.Protocol (canonical, covers all three
+		// protocols including openai-responses); fall back to use_anthropic for
+		// configs written before llm.protocol existed.
+		if cfg.Llm.Protocol != "" {
+			m.manualProtocolIdx = cpProtocolIndex(cfg.Llm.Protocol)
+		} else if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic {
 			m.manualProtocolIdx = 0 // anthropic
 		} else {
 			m.manualProtocolIdx = 1 // openai
@@ -994,11 +1021,7 @@ func (m *providerTUIModel) enterEditCustomProvider() {
 	m.editTargetName = cp.name
 	m.cpStep = cpStepName
 	m.formError = ""
-	protoIdx := 1
-	if entry.Protocol == "anthropic" {
-		protoIdx = 0
-	}
-	m.cpProtocolIdx = protoIdx
+	m.cpProtocolIdx = cpProtocolIndex(entry.Protocol)
 	m.cpNameInput.SetValue(cp.name)
 	m.cpURLInput.SetValue(entry.URL)
 	m.cpAuthInput.SetValue(entry.AuthHeader)
