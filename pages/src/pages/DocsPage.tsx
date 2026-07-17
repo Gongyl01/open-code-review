@@ -131,7 +131,7 @@ const DocsPage: React.FC = () => {
   /* Active doc slug is derived from the URL param, falling back to quickstart */
   const activeSlug: DocSlug =
     slugParam && validSlugs.has(slugParam as DocSlug) ? (slugParam as DocSlug) : 'quickstart';
-  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({ 'sb-integrations': false });
+  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({ 'sb-integrations': true });
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
   const [hoveredHeadingId, setHoveredHeadingId] = useState<string>('');
   const [searchOpen, setSearchOpen] = useState(false);
