@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,10 +58,12 @@ const (
 )
 
 // CoverageItem is one file's entry in a coverage set. ItemID is the stable
-// identity (the normalized diff fingerprint) used to sort and cross-reference
-// entries. Classification and Reason are only populated for failed items;
-// Reason, when set, must already be a redacted summary — the builder never
-// inspects or sanitizes it.
+// identity used to sort and cross-reference entries; it is minted from the raw
+// diff fingerprint via ItemID(). Fingerprint retains the raw diff fingerprint so
+// the item can be cross-referenced against the resume checkpoint index (which is
+// keyed by the raw fingerprint). Classification and Reason are only populated
+// for failed/waived items; Reason is passed through sanitizeReason() by the
+// builder as a redaction floor (callers should still redact context-aware).
 type CoverageItem struct {
 	ItemID         string       `json:"item_id"`
 	Path           string       `json:"path"`
@@ -67,6 +71,18 @@ type CoverageItem struct {
 	Fingerprint    string       `json:"fingerprint,omitempty"`
 	Classification FailureClass `json:"classification,omitempty"`
 	Reason         string       `json:"reason,omitempty"`
+}
+
+// ItemID is the single, canonical derivation of a manifest item_id from a raw
+// diff fingerprint: the hex-encoded SHA-256 of the fingerprint. Every call site
+// — RegisterSelected and each Mark* — MUST key on ItemID(fingerprint) so a raw
+// fingerprint is never accidentally used as an item_id (which would silently
+// no-op the transition and let the Finalize sweep misreport the item). The raw
+// fingerprint is kept separately in CoverageItem.Fingerprint for cross-reference
+// with the resume index.
+func ItemID(fingerprint string) string {
+	sum := sha256.Sum256([]byte(fingerprint))
+	return hex.EncodeToString(sum[:])
 }
 
 // Coverage holds the five disjoint file sets. selected is the denominator and
@@ -160,6 +176,7 @@ type ManifestBuilder struct {
 	execution   ManifestExecution
 
 	runLevelFailure bool
+	sweepClass      FailureClass // classification for items still selected at Finalize
 
 	frozen bool
 	result *RunManifest
@@ -227,6 +244,12 @@ func (b *ManifestBuilder) SetExecution(ex ManifestExecution) {
 // denominator). It must be called once per item after filtering and before
 // dispatch. Re-registering an already-known item_id is ignored so the first
 // registration wins; registration after freeze is a no-op.
+//
+// The caller MUST register only the post-deletion, post-filter dispatchable set:
+// files excluded before planning (deleted files, path/extension-filtered files)
+// must NOT be registered, because every registered item that never receives a
+// Mark* is swept to failed at Finalize — registering a non-dispatchable file
+// would fabricate a bogus failure and misreport the run as partial.
 func (b *ManifestBuilder) RegisterSelected(item CoverageItem) {
 	if b == nil || item.ItemID == "" {
 		return
@@ -235,6 +258,9 @@ func (b *ManifestBuilder) RegisterSelected(item CoverageItem) {
 	defer b.mu.Unlock()
 	if b.frozen {
 		return
+	}
+	if b.items == nil {
+		b.items = make(map[string]*builderItem)
 	}
 	if _, exists := b.items[item.ItemID]; exists {
 		return
@@ -289,16 +315,42 @@ var (
 	bearerRe = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=\-]+`)
 	// secretAssignmentRe matches `key: value` / `key=value` where the key names a
 	// credential-like field, so the value can be redacted while the key is kept.
-	secretAssignmentRe = regexp.MustCompile(`(?i)\b(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)\b(\s*[:=]\s*)"?[^\s"']+`)
+	// The value alternation handles quoted values (with spaces) and bare tokens,
+	// so a quoted secret is not partially leaked.
+	secretAssignmentRe = regexp.MustCompile(`(?i)\b(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"']+)`)
 )
+
+// stripUnsafeChars removes control characters and Unicode line separators that
+// would let escape sequences (ANSI/ANSI-CSI) or line breaks survive into a
+// terminal renderer, and collapses horizontal/vertical whitespace to a single
+// space so a reason stays one line. C0 controls (except tab/newlines, mapped to
+// space), DEL, and C1 controls are dropped.
+func stripUnsafeChars(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t', r == '\n', r == '\r', r == '\v', r == '\f',
+			r == 0x85, r == 0x2028, r == 0x2029:
+			return ' '
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			return -1 // drop remaining C0 / DEL / C1 controls
+		default:
+			return r
+		}
+	}, s)
+}
 
 // sanitizeReason is the single, best-effort redaction+truncation floor applied
 // to every reason the builder stores, so no caller path can write an unredacted
 // summary into the manifest (which is serialized to both CLI JSON and the
 // persisted session). It is a floor, not a substitute for caller-side
 // redaction: callers should still pass an already-summarized reason and omit
-// anything they cannot confirm is safe. It strips a few high-confidence secret
-// shapes, collapses to a single line, and caps length.
+// anything they cannot confirm is safe. It strips URL credentials, Bearer/Basic
+// tokens and credential-like key=value pairs, removes control/escape characters,
+// collapses to a single line, coerces to valid UTF-8, and caps length.
+//
+// NOTE: absolute local paths, cookies and raw request/response bodies are NOT
+// stripped here — that ownership is an open issue pending sign-off (see
+// docs/367-open-issues.md, OI-1). Until resolved, callers must redact those.
 func sanitizeReason(s string) string {
 	if s == "" {
 		return ""
@@ -308,8 +360,8 @@ func sanitizeReason(s string) string {
 	s = urlUserinfoRe.ReplaceAllString(s, "${1}[REDACTED]@")
 	s = bearerRe.ReplaceAllString(s, "[REDACTED]")
 	s = secretAssignmentRe.ReplaceAllString(s, "${1}${2}[REDACTED]")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ToValidUTF8(s, "�")
+	s = stripUnsafeChars(s)
 	if utf8.RuneCountInString(s) > maxReasonLen {
 		s = string([]rune(s)[:maxReasonLen]) + "…"
 	}
@@ -358,6 +410,22 @@ func (b *ManifestBuilder) SetRunLevelFailure() {
 	}
 }
 
+// SetSweepClass sets the failure classification applied to items still in the
+// selected state when Finalize sweeps them. Callers set this when the run ended
+// in a way that colors all undispatched items uniformly — FailureCancelled on
+// user cancel, FailureBudget on a budget/round-limit stop. It defaults to
+// FailureUnknown; invalid classes are ignored.
+func (b *ManifestBuilder) SetSweepClass(class FailureClass) {
+	if b == nil || !class.valid() {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.frozen {
+		b.sweepClass = class
+	}
+}
+
 // Frozen reports whether Finalize has already run.
 func (b *ManifestBuilder) Frozen() bool {
 	if b == nil {
@@ -369,9 +437,10 @@ func (b *ManifestBuilder) Frozen() bool {
 }
 
 // Finalize sweeps any item that never received a terminal state into failed
-// with FailureUnknown, computes the terminal state from the coverage sets,
-// freezes the builder and returns the immutable manifest. It is idempotent:
-// later calls return the same frozen manifest and ignore elapsed.
+// (with the configured sweep class, default unknown), computes the terminal
+// state from the coverage sets, freezes the builder and returns the immutable
+// manifest. It is idempotent: later calls return the same frozen manifest
+// (as an independent copy) and ignore elapsed.
 func (b *ManifestBuilder) Finalize(elapsed time.Duration) RunManifest {
 	if b == nil {
 		// Consistent with the nil-receiver guards on every other method: a nil
@@ -392,17 +461,23 @@ func (b *ManifestBuilder) Finalize(elapsed time.Duration) RunManifest {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.frozen && b.result != nil {
-		return *b.result
+		return b.result.cloned()
 	}
 
 	// Backstop: no selected item may be left without an outcome. This covers
 	// goroutines that exited early, cancellation before dispatch, or any path
-	// the caller forgot. It only runs when the process can still execute
-	// finalize; a hard kill falls back to the per-item checkpoints.
+	// the caller forgot. Undecided items take the run-level sweep class
+	// (cancelled/budget when the caller set it, else unknown). It only runs
+	// when the process can still execute finalize; a hard kill falls back to
+	// the per-item checkpoints.
+	sweepClass := b.sweepClass
+	if !sweepClass.valid() {
+		sweepClass = FailureUnknown
+	}
 	for _, bi := range b.items {
 		if bi.state == stateSelected {
 			bi.state = stateFailed
-			bi.item.Classification = FailureUnknown
+			bi.item.Classification = sweepClass
 			if bi.item.Reason == "" {
 				bi.item.Reason = "no terminal outcome recorded"
 			}
@@ -424,7 +499,26 @@ func (b *ManifestBuilder) Finalize(elapsed time.Duration) RunManifest {
 	}
 	b.frozen = true
 	b.result = &m
+	return b.result.cloned()
+}
+
+// cloned returns a copy of the manifest whose coverage slices are owned copies,
+// so every Finalize caller gets an independent, non-aliased snapshot. The
+// "immutable" contract then holds even against a consumer that mutates in place.
+// Slices are always non-nil so JSON renders "[]" rather than null.
+func (m RunManifest) cloned() RunManifest {
+	m.Coverage.Selected = cloneItems(m.Coverage.Selected)
+	m.Coverage.Completed = cloneItems(m.Coverage.Completed)
+	m.Coverage.Reused = cloneItems(m.Coverage.Reused)
+	m.Coverage.Failed = cloneItems(m.Coverage.Failed)
+	m.Coverage.Waived = cloneItems(m.Coverage.Waived)
 	return m
+}
+
+func cloneItems(src []CoverageItem) []CoverageItem {
+	out := make([]CoverageItem, len(src))
+	copy(out, src)
+	return out
 }
 
 // buildCoverageLocked assembles the five sorted, non-nil coverage sets from the

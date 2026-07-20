@@ -344,6 +344,119 @@ func TestMarkFailedEnforcesRedaction(t *testing.T) {
 	}
 }
 
+// ItemID is a deterministic hex SHA-256 of the fingerprint, distinct from the
+// raw fingerprint, so raw/hashed mix-ups are catchable.
+func TestItemIDDerivation(t *testing.T) {
+	fp := "review:workspace:payment.go:abc123"
+	got := ItemID(fp)
+	if got == fp {
+		t.Fatal("item_id must differ from raw fingerprint")
+	}
+	if len(got) != 64 {
+		t.Fatalf("item_id length = %d, want 64 hex chars", len(got))
+	}
+	if got != ItemID(fp) {
+		t.Fatal("item_id not deterministic")
+	}
+	if ItemID("a") == ItemID("b") {
+		t.Fatal("distinct fingerprints must yield distinct item_ids")
+	}
+}
+
+// SetSweepClass colors the undispatched (swept) items — cancel/budget scenarios
+// the design mandates instead of a blanket unknown.
+func TestSweepClassCancelledAndBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		class FailureClass
+	}{
+		{"cancel", FailureCancelled},
+		{"budget", FailureBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBuilderWith("a", "b")
+			b.MarkCompleted("a")
+			b.SetSweepClass(tc.class)
+			// "b" never marked -> swept with the configured class.
+			m := b.Finalize(0)
+			if len(m.Coverage.Failed) != 1 || m.Coverage.Failed[0].Classification != tc.class {
+				t.Fatalf("swept class = %+v, want %s", m.Coverage.Failed, tc.class)
+			}
+			if m.TerminalState != StatePartial {
+				t.Fatalf("terminal = %q, want partial", m.TerminalState)
+			}
+		})
+	}
+}
+
+// Default sweep class (unset) remains unknown; invalid class is ignored.
+func TestSweepClassDefaultsUnknown(t *testing.T) {
+	b := newBuilderWith("a")
+	b.SetSweepClass(FailureClass("bogus")) // ignored
+	m := b.Finalize(0)
+	if m.Coverage.Failed[0].Classification != FailureUnknown {
+		t.Fatalf("class = %q, want unknown", m.Coverage.Failed[0].Classification)
+	}
+}
+
+// sanitizeReason strips control chars, ANSI escapes and Unicode line separators,
+// and coerces invalid UTF-8 — so nothing survives to inject into a terminal.
+func TestSanitizeReasonStripsControlChars(t *testing.T) {
+	in := "err\x1b[2J\x1b[H boom\x00\x07\x7f end next\nline"
+	got := sanitizeReason(in)
+	for _, bad := range []string{"\x1b", "\x00", "\x07", "\x7f", " ", "\n"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("control char %q survived in %q", bad, got)
+		}
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("output not valid UTF-8")
+	}
+	if strings.ContainsAny(got, "\n\r\v\f") {
+		t.Fatalf("not single line: %q", got)
+	}
+	// invalid UTF-8 bytes are replaced, not preserved
+	if got2 := sanitizeReason("bad\xff\xfebytes"); strings.ContainsRune(got2, 0xff) {
+		t.Fatalf("invalid UTF-8 survived: %q", got2)
+	}
+}
+
+// A quoted secret value with spaces must be fully redacted (no partial leak).
+func TestSanitizeReasonQuotedValue(t *testing.T) {
+	got := sanitizeReason(`token="a b c" trailing`)
+	if strings.Contains(got, "a b c") {
+		t.Fatalf("quoted secret leaked: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("expected redaction marker: %q", got)
+	}
+}
+
+// Finalize returns snapshots that own their coverage slices: mutating one
+// caller's manifest must not affect another's (immutability under aliasing).
+func TestFinalizeReturnsOwnedSlices(t *testing.T) {
+	b := newBuilderWith("a")
+	b.MarkFailed("a", FailureProvider, "boom")
+	m1 := b.Finalize(0)
+	m2 := b.Finalize(0)
+	m1.Coverage.Failed[0].Reason = "MUTATED"
+	m1.Coverage.Selected[0].Path = "MUTATED"
+	if m2.Coverage.Failed[0].Reason == "MUTATED" || m2.Coverage.Selected[0].Path == "MUTATED" {
+		t.Fatal("returned manifests share backing arrays")
+	}
+}
+
+// A zero-value builder (not via NewManifestBuilder) must not panic on use.
+func TestZeroValueBuilderSafe(t *testing.T) {
+	b := &ManifestBuilder{}
+	b.RegisterSelected(CoverageItem{ItemID: "a", Path: "a.go"})
+	b.MarkCompleted("a")
+	m := b.Finalize(0)
+	if len(m.Coverage.Completed) != 1 || m.TerminalState != StateComplete {
+		t.Fatalf("zero-value builder produced %+v", m.Coverage)
+	}
+}
+
 // Concurrent registration and transitions on distinct items must be race-free
 // (run with -race) and produce exactly-once coverage.
 func TestConcurrentTransitions(t *testing.T) {
