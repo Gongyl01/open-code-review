@@ -240,8 +240,14 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 			_ = b.SetRunFailure(session.RunFailureInput, "failed to resolve review input")
 		}
 		a.finalizeManifest()
-		_ = a.session.Finalize()
-		return nil, fmt.Errorf("load diffs: %w", err)
+		// Keep the load failure as the primary cause, but never drop a persistence
+		// failure: a run that could not even write its failed session_end must
+		// report both rather than silently prefer one.
+		loadErr := fmt.Errorf("load diffs: %w", err)
+		if ferr := a.session.Finalize(); ferr != nil {
+			return nil, errors.Join(loadErr, fmt.Errorf("finalize session: %w", ferr))
+		}
+		return nil, loadErr
 	}
 	telemetry.SetAttr(diffSpan, "files.changed", len(a.diffs))
 	telemetry.SetAttr(diffSpan, "lines.inserted", int64(a.totalInsertions))
@@ -264,8 +270,12 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 		telemetry.Event(ctx, "no.files.changed")
 		// No item was ever selected: finalize yields a skipped manifest (no
 		// run_failure), which is the correct terminal state for "nothing to do".
+		// A persistence failure here is still a delivery error — a clean skip
+		// cannot be claimed if its session_end never reached disk.
 		a.finalizeManifest()
-		_ = a.session.Finalize()
+		if ferr := a.session.Finalize(); ferr != nil {
+			return []model.LlmComment{}, fmt.Errorf("finalize session: %w", ferr)
+		}
 		return []model.LlmComment{}, nil
 	}
 
@@ -837,6 +847,11 @@ func (a *Agent) markFailed(d model.Diff, class session.FailureClass, reason stri
 	}
 }
 
+// errMainTaskEmpty is returned when the review template carries no main_task
+// messages. It is a sentinel so callers classify it with errors.Is instead of
+// matching error text, which silently breaks the moment the wording changes.
+var errMainTaskEmpty = errors.New("main_task.messages is empty in template")
+
 // classifyItemError maps a subtask error to a stable item failure class and a
 // safe, generic reason. It never returns the raw error text (which may embed a
 // provider payload, credentials or absolute paths); the full error is persisted
@@ -849,7 +864,7 @@ func classifyItemError(err error) (session.FailureClass, string) {
 		return session.FailureTimeout, "file review exceeded its time limit"
 	case errors.Is(err, context.Canceled):
 		return session.FailureCancelled, "file review was cancelled"
-	case strings.Contains(err.Error(), "main_task.messages is empty"):
+	case errors.Is(err, errMainTaskEmpty):
 		return session.FailureConfiguration, "review template main_task is empty"
 	default:
 		return session.FailureProvider, "provider or subtask request failed"
@@ -984,7 +999,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) (bool, *subtas
 
 	// Phase 2: Main task loop
 	if len(a.args.Template.MainTask.Messages) == 0 {
-		return false, nil, fmt.Errorf("main_task.messages is empty in template")
+		return false, nil, errMainTaskEmpty
 	}
 
 	rawMsgs := a.args.Template.MainTask.Messages

@@ -236,6 +236,74 @@ func TestSessionFilePermissions(t *testing.T) {
 	}
 }
 
+// TestFinalizeSurfacesWriteError locks the contract A1/A2/A3 build on: when the
+// session_end write fails, Finalize returns that error instead of swallowing it,
+// so callers can surface a delivery failure rather than claim a clean run. We
+// force the failure by closing the underlying file out from under the buffered
+// writer; the Flush inside WriteSessionEnd then errors on the closed fd.
+func TestFinalizeSurfacesWriteError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	if sh.persist == nil || sh.persist.file == nil {
+		t.Fatal("expected an open persist writer")
+	}
+	if err := sh.persist.file.Close(); err != nil {
+		t.Fatalf("pre-close session file: %v", err)
+	}
+
+	if err := sh.Finalize(); err == nil {
+		t.Fatal("Finalize returned nil despite a write failure; persistence error was swallowed")
+	}
+}
+
+// TestFinalizeReplaysWriteErrorOnEveryCall locks A3: with the finalized flag set
+// before the write, a first call returned the error but a second call saw
+// finalized==true and returned nil — masking the failure. Every call must now
+// replay the cached write error.
+func TestFinalizeReplaysWriteErrorOnEveryCall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	if sh.persist == nil || sh.persist.file == nil {
+		t.Fatal("expected an open persist writer")
+	}
+	if err := sh.persist.file.Close(); err != nil {
+		t.Fatalf("pre-close session file: %v", err)
+	}
+
+	err1 := sh.Finalize()
+	err2 := sh.Finalize()
+	if err1 == nil || err2 == nil {
+		t.Fatalf("every Finalize call must replay the write failure; got err1=%v err2=%v", err1, err2)
+	}
+}
+
+// TestFinalizeWritesSessionEndExactlyOnce locks the other half of A3: repeated
+// Finalize calls must not append a second session_end record.
+func TestFinalizeWritesSessionEndExactlyOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	if err := sh.Finalize(); err != nil {
+		t.Fatalf("first finalize: %v", err)
+	}
+	if err := sh.Finalize(); err != nil {
+		t.Fatalf("second finalize: %v", err)
+	}
+
+	records := readJSONLRecords(t, sessionJSONLPath(t, repoDir, sh.SessionID))
+	n := 0
+	for _, r := range records {
+		if r["type"] == "session_end" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("session_end record count = %d, want exactly 1", n)
+	}
+}
+
 func TestSessionEndIncludesFailures(t *testing.T) {
 	repoDir := t.TempDir()
 	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})

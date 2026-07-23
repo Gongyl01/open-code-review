@@ -167,6 +167,17 @@ func TestCanonicalRemote(t *testing.T) {
 		{"scp no user", "github.com:org/repo", "github.com/org/repo"},
 		{"host uppercased", "https://GitHub.com/Org/Repo.git", "github.com/Org/Repo"},
 		{"trailing slash", "https://github.com/org/repo/", "github.com/org/repo"},
+		// B1: a port distinguishes endpoints and must survive canonicalization.
+		{"https port kept", "https://example.com:8443/org/repo.git", "example.com:8443/org/repo"},
+		{"ssh port kept", "ssh://git@example.com:2222/org/repo.git", "example.com:2222/org/repo"},
+		// B2: an "@" inside the path must not be truncated as scp userinfo.
+		{"scp at in path", "git@host.com:a/b@c.git", "host.com/a/b@c"},
+		// B3: local remotes have no stable network identity → omitted.
+		{"local absolute", "/srv/git/repo.git", ""},
+		{"local relative", "../peer/repo.git", ""},
+		{"file scheme", "file:///srv/git/repo.git", ""},
+		{"windows drive", `C:\repos\thing.git`, ""},
+		{"unc share", `\\server\share\repo.git`, ""},
 		{"empty", "", ""},
 		{"whitespace", "   ", ""},
 	}

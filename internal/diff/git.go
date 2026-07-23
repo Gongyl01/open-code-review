@@ -318,9 +318,10 @@ func (p *Provider) computeMergeBase(ctx context.Context, from, to string) string
 // repository's "origin" remote, suitable for hashing into the run manifest's
 // repository.identity_sha256. It reads the configured origin URL and canonicalizes
 // it — dropping any embedded userinfo, query and fragment (so credentials never
-// leak), lowercasing the host, and trimming a trailing ".git"/"/" — so the same
-// repository yields the same identity regardless of how it was cloned. It returns
-// "" when there is no origin remote (the caller then omits repository identity).
+// leak), lowercasing the host while keeping any port, and trimming a trailing
+// ".git"/"/" — so the same repository yields the same identity regardless of how
+// it was cloned. It returns "" when there is no origin remote, or when origin is
+// a local-filesystem remote (the caller then omits repository identity).
 func (p *Provider) RemoteIdentity(ctx context.Context) string {
 	out, err := p.runGit(ctx, "remote", "get-url", "origin")
 	if err != nil {
@@ -329,10 +330,22 @@ func (p *Provider) RemoteIdentity(ctx context.Context) string {
 	return canonicalRemote(firstLine(out))
 }
 
-// canonicalRemote strips credentials and volatile URL parts from a git remote
-// URL, returning "host/path" (host lowercased, path case preserved). It handles
-// both scheme URLs (https://user:pass@host/path.git) and scp-like syntax
-// (git@host:path.git). An unparseable or empty input yields "".
+// canonicalRemote reduces a git remote URL to a stable, credential-free identity
+// string for hashing into repository.identity_sha256, so the same repository
+// yields the same identity regardless of transport or embedded credentials.
+//
+// Network remotes canonicalize to "host[:port]/path": the host is lowercased and
+// any port is KEPT (two remotes differing only in port are distinct endpoints),
+// while the path preserves case and loses a trailing ".git"/"/".
+//
+// Local remotes (file://, absolute/relative filesystem paths, Windows drive
+// paths, UNC shares) have no stable network identity and no credentials to
+// strip; they canonicalize to "" so the caller omits repository identity — the
+// same behavior as a missing origin. Whether local remotes should instead carry
+// a path-based identity is a deferred product decision (docs/367-open-issues.md
+// OI-11 / B3); isolating them in one branch keeps that switch cheap.
+//
+// An empty or unrecognizable input yields "".
 func canonicalRemote(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -342,30 +355,75 @@ func canonicalRemote(raw string) string {
 	if i := strings.IndexAny(s, "?#"); i >= 0 {
 		s = s[:i]
 	}
-	var host, rest string
-	if u, err := url.Parse(s); err == nil && strings.Contains(s, "://") && u.Host != "" {
-		host = strings.ToLower(u.Hostname()) // Hostname() drops userinfo and port
-		rest = u.Path
-	} else {
-		// scp-like: [user@]host:path — no scheme. Strip userinfo, split host:path.
-		if at := strings.LastIndex(s, "@"); at >= 0 {
-			s = s[at+1:]
-		}
-		if colon := strings.Index(s, ":"); colon >= 0 {
-			host = strings.ToLower(s[:colon])
-			rest = s[colon+1:]
-		} else {
-			host = strings.ToLower(s)
-		}
+	// Local remotes carry no stable network identity (see doc comment). Detect
+	// them before the scp split so a Windows "C:\…" path is not mistaken for a
+	// "host:path" with host "c".
+	if isLocalRemote(s) {
+		return ""
 	}
-	rest = strings.TrimPrefix(rest, "/")
-	rest = strings.TrimSuffix(rest, "/")
-	rest = strings.TrimSuffix(rest, ".git")
-	rest = strings.TrimSuffix(rest, "/")
-	if rest == "" {
+	// scheme://[user[:pass]@]host[:port]/path. url.Host is "host[:port]" and
+	// never includes userinfo, so credentials drop out and the port is kept.
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+			return joinHostPath(strings.ToLower(u.Host), u.Path)
+		}
+		return ""
+	}
+	// scp-like: [user@]host:path. The userinfo "@" lives in the host segment,
+	// which ends at the FIRST ":"; split there first so any "@" inside the path
+	// is preserved rather than truncated as if it were userinfo.
+	colon := strings.IndexByte(s, ':')
+	if colon < 0 {
+		return ""
+	}
+	hostSeg, path := s[:colon], s[colon+1:]
+	if at := strings.LastIndexByte(hostSeg, '@'); at >= 0 {
+		hostSeg = hostSeg[at+1:]
+	}
+	host := strings.ToLower(hostSeg)
+	if host == "" {
+		return ""
+	}
+	return joinHostPath(host, path)
+}
+
+// joinHostPath assembles the canonical "host[/path]" form, trimming a leading
+// "/" and a trailing ".git"/"/" from the path while preserving its case.
+func joinHostPath(host, path string) string {
+	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, "/")
+	path = strings.TrimSuffix(path, ".git")
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
 		return host
 	}
-	return host + "/" + rest
+	return host + "/" + path
+}
+
+// isLocalRemote reports whether a remote URL points at the local filesystem
+// rather than a network host: a file:// URL, a POSIX absolute/relative/home
+// path, a Windows drive path (X:\ or X:/), or a UNC share (\\server\share).
+func isLocalRemote(s string) bool {
+	switch {
+	case strings.HasPrefix(s, "file://"):
+		return true
+	case strings.HasPrefix(s, "/"), strings.HasPrefix(s, "~"):
+		return true
+	case strings.HasPrefix(s, "./"), strings.HasPrefix(s, "../"), s == ".", s == "..":
+		return true
+	case strings.HasPrefix(s, `\\`): // UNC \\server\share
+		return true
+	}
+	// Windows drive path: X:\ or X:/. Require a separator after the colon so a
+	// single-letter scp host ("c:path") is not misread — real hosts have a dot.
+	if len(s) >= 3 && isASCIILetter(s[0]) && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		return true
+	}
+	return false
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // resolveCommit returns the immutable commit SHA a ref points at, or "" when the

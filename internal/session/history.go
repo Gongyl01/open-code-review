@@ -59,9 +59,14 @@ type SessionHistory struct {
 	// Finalize, embedded into session_end and exposed to the CLI. Nil for
 	// legacy/scan runs.
 	finalManifest *RunManifest
-	// finalized guards Finalize so session_end is written exactly once even if
-	// several run paths (error, skip, normal) reach the finalize call.
-	finalized bool
+	// finalizeOnce ensures session_end is written exactly once even if several
+	// run paths (error, skip, normal) — possibly concurrently — reach Finalize.
+	finalizeOnce sync.Once
+	// finalizeErr caches the result of that single write attempt so every caller,
+	// including any retry after the first, observes the same delivery outcome
+	// rather than a later call falsely reporting success. Read only after
+	// finalizeOnce.Do returns, which establishes the happens-before.
+	finalizeErr error
 }
 
 // FileSession represents the conversation records for a single file subtask.
@@ -256,33 +261,34 @@ func (sh *SessionHistory) RecordReviewItemFailed(filePath, oldPath, newPath, fin
 // Finalize marks the session as complete, sets the end time, and persists the
 // final summary record. When a frozen manifest was stored via SetFinalManifest
 // it is embedded into session_end as run_manifest, which is the last physical
-// record of the JSONL stream. It is idempotent — only the first call writes — so
-// the several run paths (normal, skipped, all-failed, run-level failure) that
-// must finalize can all call it safely. A persistence error is returned as a
-// delivery error rather than swallowed; the frozen manifest is never rewritten
-// because of it.
+// record of the JSONL stream. It is idempotent — only the first call writes, and
+// that single attempt's outcome is cached so every later call replays the same
+// result instead of a retry falsely reporting success. The several run paths
+// (normal, skipped, all-failed, run-level failure), even concurrently, can all
+// call it safely. A persistence error is returned as a delivery error rather
+// than swallowed; the frozen manifest is never rewritten because of it.
 func (sh *SessionHistory) Finalize() error {
-	sh.mu.Lock()
-	if sh.finalized {
+	sh.finalizeOnce.Do(func() {
+		sh.mu.Lock()
+		sh.EndTime = time.Now()
+		p := sh.persist
+		manifest := sh.finalManifest
+		duration := sh.EndTime.Sub(sh.StartTime)
+		filesReviewed := make([]string, 0, len(sh.FileSessions))
+		for fp := range sh.FileSessions {
+			filesReviewed = append(filesReviewed, fp)
+		}
+		failures := atomic.LoadInt64(&sh.llmFailures)
 		sh.mu.Unlock()
-		return nil
-	}
-	sh.finalized = true
-	sh.EndTime = time.Now()
-	p := sh.persist
-	manifest := sh.finalManifest
-	duration := sh.EndTime.Sub(sh.StartTime)
-	filesReviewed := make([]string, 0, len(sh.FileSessions))
-	for fp := range sh.FileSessions {
-		filesReviewed = append(filesReviewed, fp)
-	}
-	failures := atomic.LoadInt64(&sh.llmFailures)
-	sh.mu.Unlock()
 
-	if p != nil {
-		return p.WriteSessionEnd(duration, filesReviewed, failures, manifest)
-	}
-	return nil
+		// The single write attempt happens outside the lock (disk I/O); its
+		// result is cached in finalizeErr. sync.Once guarantees every other
+		// caller blocks until this completes, then reads the same finalizeErr.
+		if p != nil {
+			sh.finalizeErr = p.WriteSessionEnd(duration, filesReviewed, failures, manifest)
+		}
+	})
+	return sh.finalizeErr
 }
 
 // AppendTaskRecord adds a new task record to the file session for the given

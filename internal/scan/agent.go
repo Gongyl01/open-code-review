@@ -227,7 +227,12 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	if reviewable == 0 {
 		fmt.Fprintln(stdout.Writer(), "[ocr] No reviewable files. Skipping scan.")
 		telemetry.Event(ctx, "scan.no.files")
-		a.session.Finalize()
+		// A clean skip still has to reach disk: if session_end never persisted,
+		// the skip cannot be claimed. scan is a #367 Non-Goal (no manifest
+		// builder), but the session_end delivery contract still applies.
+		if ferr := a.session.Finalize(); ferr != nil {
+			return []model.LlmComment{}, fmt.Errorf("finalize session: %w", ferr)
+		}
 		return []model.LlmComment{}, nil
 	}
 
@@ -258,7 +263,12 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	// Project-level summary runs after all batches; never blocks return.
 	a.maybeRunProjectSummary(ctx, comments)
 
-	a.session.Finalize()
+	// Keep the dispatch error as the primary cause; only surface a persistence
+	// failure when the run otherwise succeeded, so a clean scan cannot be
+	// claimed if its session_end never reached disk.
+	if ferr := a.session.Finalize(); ferr != nil && err == nil {
+		err = fmt.Errorf("finalize session: %w", ferr)
+	}
 	return comments, err
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -422,8 +423,8 @@ func TestExecuteSubtask_EmptyMainTask(t *testing.T) {
 	if stop != nil {
 		t.Fatalf("stop = %+v, want nil on error", stop)
 	}
-	if !strings.Contains(err.Error(), "main_task.messages is empty") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, errMainTaskEmpty) {
+		t.Errorf("expected errMainTaskEmpty sentinel via errors.Is, got: %v", err)
 	}
 }
 
