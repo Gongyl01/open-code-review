@@ -295,11 +295,17 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	}
 	// Freeze coverage into the immutable manifest before session_end embeds it,
 	// so the CLI and the persisted session serialize the identical object. A
-	// persistence failure is surfaced as a delivery error only when the review
-	// itself succeeded — a real review error stays the primary cause.
+	// persistence failure is a delivery error in its own right: when the review
+	// also failed, both facts are reported (errors.Join) rather than letting the
+	// review error hide the fact that session_end never reached disk.
 	a.finalizeManifest()
-	if ferr := a.session.Finalize(); ferr != nil && err == nil {
-		err = ferr
+	if ferr := a.session.Finalize(); ferr != nil {
+		finalizeErr := fmt.Errorf("finalize session: %w", ferr)
+		if err != nil {
+			err = errors.Join(err, finalizeErr)
+		} else {
+			err = finalizeErr
+		}
 	}
 	return comments, err
 }

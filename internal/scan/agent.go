@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -263,11 +264,16 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	// Project-level summary runs after all batches; never blocks return.
 	a.maybeRunProjectSummary(ctx, comments)
 
-	// Keep the dispatch error as the primary cause; only surface a persistence
-	// failure when the run otherwise succeeded, so a clean scan cannot be
-	// claimed if its session_end never reached disk.
-	if ferr := a.session.Finalize(); ferr != nil && err == nil {
-		err = fmt.Errorf("finalize session: %w", ferr)
+	// A persistence failure is a delivery error in its own right: when the scan
+	// also failed, both facts are reported (errors.Join) rather than letting the
+	// dispatch error hide the fact that session_end never reached disk.
+	if ferr := a.session.Finalize(); ferr != nil {
+		finalizeErr := fmt.Errorf("finalize session: %w", ferr)
+		if err != nil {
+			err = errors.Join(err, finalizeErr)
+		} else {
+			err = finalizeErr
+		}
 	}
 	return comments, err
 }
