@@ -49,6 +49,19 @@ type SessionHistory struct {
 	persist      *jsonlWriter
 	FileSessions map[string]*FileSession
 	llmFailures  int64
+
+	// manifest is the run's coverage accumulator, sharing the session ID as its
+	// run_id. It is only created when SessionOptions.Operation is non-empty (the
+	// review path opts in; scan stays legacy with a nil builder). It is nil for
+	// legacy/scan sessions, so all access must be nil-safe.
+	manifest *ManifestBuilder
+	// finalManifest is the frozen manifest handed back by the agent before
+	// Finalize, embedded into session_end and exposed to the CLI. Nil for
+	// legacy/scan runs.
+	finalManifest *RunManifest
+	// finalized guards Finalize so session_end is written exactly once even if
+	// several run paths (error, skip, normal) reach the finalize call.
+	finalized bool
 }
 
 // FileSession represents the conversation records for a single file subtask.
@@ -103,6 +116,11 @@ type SessionOptions struct {
 	DiffTo      string
 	DiffCommit  string
 	ResumedFrom string
+
+	// Operation opts this session into a run manifest. When non-empty (e.g.
+	// "review") New creates a ManifestBuilder with this operation and the session
+	// ID as its run_id. Empty (the scan/legacy default) leaves the builder nil.
+	Operation string
 }
 
 // New creates a new SessionHistory with the given repo directory.
@@ -130,7 +148,43 @@ func New(repoDir, gitBranch, model string, opts SessionOptions) *SessionHistory 
 		p.WriteSessionStart(sh.StartTime)
 	}
 
+	if opts.Operation != "" {
+		sh.manifest = NewManifestBuilder(sessionID, opts.Operation)
+	}
+
 	return sh
+}
+
+// Manifest returns the run's coverage builder, or nil for legacy/scan sessions
+// that did not opt in via SessionOptions.Operation. Callers must be nil-safe.
+func (sh *SessionHistory) Manifest() *ManifestBuilder {
+	if sh == nil {
+		return nil
+	}
+	return sh.manifest
+}
+
+// SetFinalManifest stores the frozen manifest the agent produced. It is embedded
+// into session_end by Finalize and returned to the CLI via FinalManifest. Passing
+// nil (legacy/scan, or a construction failure) leaves session_end in legacy form.
+func (sh *SessionHistory) SetFinalManifest(m *RunManifest) {
+	if sh == nil {
+		return
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	sh.finalManifest = m
+}
+
+// FinalManifest returns the frozen manifest stored for this run, or nil when the
+// run produced none (legacy/scan, or a construction failure).
+func (sh *SessionHistory) FinalManifest() *RunManifest {
+	if sh == nil {
+		return nil
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return sh.finalManifest
 }
 
 // GetOrCreateFileSession returns the FileSession for the given file path,
@@ -199,12 +253,24 @@ func (sh *SessionHistory) RecordReviewItemFailed(filePath, oldPath, newPath, fin
 	}
 }
 
-// Finalize marks the session as complete, sets the end time, and persists
-// the final summary record.
-func (sh *SessionHistory) Finalize() {
+// Finalize marks the session as complete, sets the end time, and persists the
+// final summary record. When a frozen manifest was stored via SetFinalManifest
+// it is embedded into session_end as run_manifest, which is the last physical
+// record of the JSONL stream. It is idempotent — only the first call writes — so
+// the several run paths (normal, skipped, all-failed, run-level failure) that
+// must finalize can all call it safely. A persistence error is returned as a
+// delivery error rather than swallowed; the frozen manifest is never rewritten
+// because of it.
+func (sh *SessionHistory) Finalize() error {
 	sh.mu.Lock()
+	if sh.finalized {
+		sh.mu.Unlock()
+		return nil
+	}
+	sh.finalized = true
 	sh.EndTime = time.Now()
 	p := sh.persist
+	manifest := sh.finalManifest
 	duration := sh.EndTime.Sub(sh.StartTime)
 	filesReviewed := make([]string, 0, len(sh.FileSessions))
 	for fp := range sh.FileSessions {
@@ -214,8 +280,9 @@ func (sh *SessionHistory) Finalize() {
 	sh.mu.Unlock()
 
 	if p != nil {
-		p.WriteSessionEnd(duration, filesReviewed, failures)
+		return p.WriteSessionEnd(duration, filesReviewed, failures, manifest)
 	}
+	return nil
 }
 
 // AppendTaskRecord adds a new task record to the file session for the given

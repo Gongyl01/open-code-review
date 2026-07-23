@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,10 +131,16 @@ func resolveWorkingDir(input string, requireGit bool) (string, bool, error) {
 type llmRuntime struct {
 	Client       llm.LLMClient
 	Model        string
+	Provider     string // configured provider name (non-secret label; empty for env-resolved endpoints)
 	PlanToolDefs []llm.ToolDef
 	MainToolDefs []llm.ToolDef
 	Collector    *tool.CommentCollector
 	AppCfg       *Config
+	// RuntimeConfig holds the allowlisted, non-secret runtime settings (protocol,
+	// sanitized endpoint host, language, timeout) derived from the resolved
+	// endpoint and app config, for the run manifest's runtime_config_sha256. It
+	// never carries the token or full URL.
+	RuntimeConfig agent.RuntimeConfig
 }
 
 // loadLLMRuntime loads tool defs from toolConfigPath, reads the app config
@@ -159,9 +166,10 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath, modelOverride string
 	}
 	// Apply the language directive even when the config file is missing
 	// (upstream #fix: ApplyLanguage with empty lang falls back to default).
-	var lang string
+	var lang, provider string
 	if appCfg != nil {
 		lang = appCfg.Language
+		provider = appCfg.Provider
 	}
 	tpl.ApplyLanguage(lang)
 
@@ -173,11 +181,34 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath, modelOverride string
 	return &llmRuntime{
 		Client:       llm.NewLLMClient(ep),
 		Model:        ep.Model,
+		Provider:     provider,
 		PlanToolDefs: planToolDefs,
 		MainToolDefs: mainToolDefs,
 		Collector:    tool.NewCommentCollector(),
 		AppCfg:       appCfg,
+		RuntimeConfig: agent.RuntimeConfig{
+			Protocol:     ep.Protocol,
+			EndpointHost: sanitizeEndpointHost(ep.URL),
+			Language:     lang,
+			Timeout:      ep.Timeout,
+		},
 	}, nil
+}
+
+// sanitizeEndpointHost extracts the credential-free host[:port] from a full LLM
+// endpoint URL, dropping scheme, any embedded userinfo, path, query and fragment
+// so no secret material survives into the manifest's runtime_config hash. The
+// host is lowercased for a stable identity (DNS is case-insensitive). An empty
+// or unparseable URL, or one without a host, yields "".
+func sanitizeEndpointHost(rawURL string) string {
+	if strings.TrimSpace(rawURL) == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host) // u.Host is host[:port]; userinfo lives in u.User
 }
 
 // applyCLIExcludes appends user-supplied --exclude patterns (already split

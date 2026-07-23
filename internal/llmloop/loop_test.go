@@ -99,7 +99,7 @@ func TestRunPerFile_TaskDoneImmediately(t *testing.T) {
 	runner := NewRunner(deps)
 
 	msgs := []llm.Message{llm.NewTextMessage("user", "review this file")}
-	completed, err := runner.RunPerFile(context.Background(), msgs, "main.go")
+	completed, _, err := runner.RunPerFile(context.Background(), msgs, "main.go")
 	if err != nil {
 		t.Fatalf("RunPerFile: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunPerFile_ToolCallThenDone(t *testing.T) {
 	runner := NewRunner(deps)
 
 	msgs := []llm.Message{llm.NewTextMessage("user", "review")}
-	completed, err := runner.RunPerFile(context.Background(), msgs, "main.go")
+	completed, _, err := runner.RunPerFile(context.Background(), msgs, "main.go")
 	if err != nil {
 		t.Fatalf("RunPerFile: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRunPerFile_ContextCancelled(t *testing.T) {
 	cancel()
 
 	msgs := []llm.Message{llm.NewTextMessage("user", "review")}
-	completed, err := runner.RunPerFile(ctx, msgs, "main.go")
+	completed, _, err := runner.RunPerFile(ctx, msgs, "main.go")
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
@@ -188,7 +188,7 @@ func TestRunPerFile_UnknownTool(t *testing.T) {
 	runner := NewRunner(deps)
 
 	msgs := []llm.Message{llm.NewTextMessage("user", "review")}
-	completed, err := runner.RunPerFile(context.Background(), msgs, "main.go")
+	completed, _, err := runner.RunPerFile(context.Background(), msgs, "main.go")
 	if err != nil {
 		t.Fatalf("RunPerFile: %v", err)
 	}
@@ -212,12 +212,15 @@ func TestRunPerFile_MaxToolRequestsWithoutTaskDoneDoesNotComplete(t *testing.T) 
 	runner := NewRunner(deps)
 
 	msgs := []llm.Message{llm.NewTextMessage("user", "review")}
-	completed, err := runner.RunPerFile(context.Background(), msgs, "main.go")
+	completed, stop, err := runner.RunPerFile(context.Background(), msgs, "main.go")
 	if err != nil {
 		t.Fatalf("RunPerFile: %v", err)
 	}
 	if completed {
 		t.Fatal("RunPerFile completed without task_done")
+	}
+	if stop != StopMaxRounds {
+		t.Fatalf("expected StopMaxRounds, got %v", stop)
 	}
 }
 

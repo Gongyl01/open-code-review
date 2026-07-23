@@ -3,6 +3,9 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,10 +19,34 @@ import (
 // value; unknown future versions must be ignored rather than misread.
 const ManifestSchemaVersion = "ocr.run-manifest/v1"
 
+// OperationReview is the manifest operation for a diff review run. It is the
+// only operation wired in v1 (scan stays legacy with no manifest).
+const OperationReview = "review"
+
+// Input modes describe how the run's input was selected. They are stored in
+// ManifestInput.Mode (mandatory) and decide how the remaining input fields are
+// interpreted. They also feed ItemID derivation so that the same logical file
+// keeps a stable item_id across a resume chain.
+const (
+	InputModeRange     = "range"
+	InputModeCommit    = "commit"
+	InputModeWorkspace = "workspace"
+)
+
+// validInputMode reports whether m is one of the three mandatory input modes.
+func validInputMode(m string) bool {
+	switch m {
+	case InputModeRange, InputModeCommit, InputModeWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // FailureClass is the typed classification attached to every failed coverage
 // item. The set is fixed so downstream consumers can switch on it reliably.
-// FailureUnknown is the mandatory catch-all: any error that cannot be mapped
-// to a more specific class, and any item swept in by Finalize, uses it.
+// FailureUnknown is the mandatory catch-all: it only applies to an item that is
+// known to have failed but cannot be reliably mapped to a more specific class.
 type FailureClass string
 
 const (
@@ -33,7 +60,7 @@ const (
 	FailureUnknown       FailureClass = "unknown"
 )
 
-// valid reports whether c is one of the fixed failure classes.
+// valid reports whether c is one of the fixed item failure classes.
 func (c FailureClass) valid() bool {
 	switch c {
 	case FailureProvider, FailureTimeout, FailureCancelled, FailureConfiguration,
@@ -44,10 +71,77 @@ func (c FailureClass) valid() bool {
 	}
 }
 
+// RunFailureClass classifies why the whole run stopped. It is a distinct
+// enumeration from the per-item FailureClass: a run never fails with "provider"
+// or "panic" (those are always attributed to a single item), and it adds
+// "internal" for scheduler/invariant failures. Its values are:
+//
+//	input         — diff resolution / input freezing failed
+//	configuration — an in-run configuration failure after the builder existed
+//	timeout       — a global deadline elapsed
+//	cancelled     — the user actively cancelled the run
+//	budget        — an aggregate token/round budget pool was exhausted
+//	internal      — scheduler failure or an internal invariant was violated
+//	unknown       — confirmed run-level failure that cannot be classified
+type RunFailureClass string
+
+const (
+	RunFailureInput         RunFailureClass = "input"
+	RunFailureConfiguration RunFailureClass = "configuration"
+	RunFailureTimeout       RunFailureClass = "timeout"
+	RunFailureCancelled     RunFailureClass = "cancelled"
+	RunFailureBudget        RunFailureClass = "budget"
+	RunFailureInternal      RunFailureClass = "internal"
+	RunFailureUnknown       RunFailureClass = "unknown"
+)
+
+// valid reports whether c is one of the fixed run failure classes.
+func (c RunFailureClass) valid() bool {
+	switch c {
+	case RunFailureInput, RunFailureConfiguration, RunFailureTimeout,
+		RunFailureCancelled, RunFailureBudget, RunFailureInternal, RunFailureUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// itemFailureForRunClass maps a run-level stop cause onto the item-level
+// classification used when Finalize sweeps the still-undecided selected items.
+// A global timeout/cancel/budget stop colors its pending items with the exact
+// matching class; input/configuration keep their own name; internal and unknown
+// have no item-level equivalent (the item enum has no "internal"), so their
+// swept items fall back to FailureUnknown while the run_failure retains the
+// precise cause.
+func itemFailureForRunClass(c RunFailureClass) FailureClass {
+	switch c {
+	case RunFailureInput:
+		return FailureInput
+	case RunFailureConfiguration:
+		return FailureConfiguration
+	case RunFailureTimeout:
+		return FailureTimeout
+	case RunFailureCancelled:
+		return FailureCancelled
+	case RunFailureBudget:
+		return FailureBudget
+	default: // internal, unknown
+		return FailureUnknown
+	}
+}
+
+// RunFailure records why the entire run stopped, independently of any single
+// item. Its presence forces the terminal state to failed while leaving the
+// per-item outcomes that did complete intact.
+type RunFailure struct {
+	Classification RunFailureClass `json:"classification"`
+	Reason         string          `json:"reason,omitempty"`
+}
+
 // TerminalState is the single, coverage-derived outcome of a run. It is the
 // authoritative replacement for the warning-derived "completed_with_errors"
-// status: it is computed only from the coverage sets, never from comment count
-// or warnings.
+// status: it is computed only from the coverage sets plus run_failure, never
+// from comment count or warnings.
 type TerminalState string
 
 const (
@@ -57,11 +151,13 @@ const (
 	StateSkipped  TerminalState = "skipped"
 )
 
-// CoverageItem is one file's entry in a coverage set. ItemID is the stable
-// identity used to sort and cross-reference entries; it is minted from the raw
-// diff fingerprint via ItemID(). Fingerprint retains the raw diff fingerprint so
-// the item can be cross-referenced against the resume checkpoint index (which is
-// keyed by the raw fingerprint). Classification and Reason are only populated
+// CoverageItem is one file's entry in a coverage set. ItemID is the
+// content-independent logical identity used to sort and cross-reference
+// entries; it is minted via ItemID() from operation, input mode and the
+// normalized old/new path, so a diff-content change alone does not change it.
+// Fingerprint retains the raw diff fingerprint (which does include diff content)
+// so the item can be cross-referenced against the resume checkpoint index (which
+// is keyed by the raw fingerprint). Classification and Reason are only populated
 // for failed/waived items; Reason is passed through sanitizeReason() by the
 // builder as a redaction floor (callers should still redact context-aware).
 type CoverageItem struct {
@@ -73,16 +169,42 @@ type CoverageItem struct {
 	Reason         string       `json:"reason,omitempty"`
 }
 
-// ItemID is the single, canonical derivation of a manifest item_id from a raw
-// diff fingerprint: the hex-encoded SHA-256 of the fingerprint. Every call site
-// — RegisterSelected and each Mark* — MUST key on ItemID(fingerprint) so a raw
-// fingerprint is never accidentally used as an item_id (which would silently
-// no-op the transition and let the Finalize sweep misreport the item). The raw
-// fingerprint is kept separately in CoverageItem.Fingerprint for cross-reference
-// with the resume index.
-func ItemID(fingerprint string) string {
-	sum := sha256.Sum256([]byte(fingerprint))
+// ItemID is the single, canonical derivation of a manifest item_id. It is
+// content-independent: it is derived from the operation, the input mode and the
+// normalized old/new path, so the same logical file keeps a stable item_id
+// across a resume chain even when its diff content (and therefore its
+// fingerprint) changes. The raw diff content lives only in
+// CoverageItem.Fingerprint, which is used for checkpoint matching. Every call
+// site — RegisterSelected and each Mark* — MUST key on the same
+// ItemID(operation, mode, oldPath, newPath) so a mismatched key never silently
+// no-ops a transition.
+func ItemID(operation, mode, oldPath, newPath string) string {
+	// NUL-join the identity fields. Paths never contain NUL and operation/mode
+	// are controlled enums, so this join is unambiguous.
+	key := strings.Join([]string{
+		operation,
+		mode,
+		normalizePath(oldPath),
+		normalizePath(newPath),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
+}
+
+// normalizePath canonicalizes a path for identity derivation: it unifies
+// separators to forward slashes and cleans redundant "." / ".." / duplicate
+// separators, so cosmetically different spellings of the same path yield the
+// same item_id. An empty path stays empty.
+func normalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = path.Clean(p)
+	if p == "." {
+		return ""
+	}
+	return p
 }
 
 // Coverage holds the five disjoint file sets. selected is the denominator and
@@ -101,10 +223,13 @@ type ManifestRepository struct {
 	IdentitySHA256 string `json:"identity_sha256,omitempty"`
 }
 
-// ManifestInput is the frozen, resolved input identity of a run. Resolved
-// values are actual commit SHAs captured before execution, not the mutable refs
-// the user typed; resume inherits these from the parent manifest.
+// ManifestInput is the frozen, resolved input identity of a run. Mode is
+// mandatory and decides how the remaining fields are read. Resolved values are
+// actual commit SHAs captured before execution, not the mutable refs the user
+// typed. A child (resume) run always recomputes its own input rather than
+// copying the parent's.
 type ManifestInput struct {
+	Mode                 string `json:"mode"`
 	RequestedFrom        string `json:"requested_from,omitempty"`
 	RequestedHead        string `json:"requested_head,omitempty"`
 	ResolvedBase         string `json:"resolved_base,omitempty"`
@@ -138,6 +263,7 @@ type RunManifest struct {
 	Input         ManifestInput      `json:"input"`
 	Execution     ManifestExecution  `json:"execution"`
 	Coverage      Coverage           `json:"coverage"`
+	RunFailure    *RunFailure        `json:"run_failure,omitempty"`
 	ElapsedMS     int64              `json:"elapsed_ms"`
 }
 
@@ -158,12 +284,31 @@ type builderItem struct {
 	state itemState
 }
 
+// Errors returned by the builder's mutating entry points. Callers must handle
+// them rather than assume success: a silent no-op would let a mis-keyed or
+// late transition drop an outcome and be discovered only at Finalize (or never).
+var (
+	errNilBuilder = errors.New("manifest: operation on nil builder")
+	errFrozen     = errors.New("manifest: builder already finalized")
+	errSealed     = errors.New("manifest: selected set already sealed")
+	errEmptyID    = errors.New("manifest: empty item_id")
+)
+
 // ManifestBuilder accumulates coverage for one run and freezes it into a
 // RunManifest. It is safe for concurrent use: every registration, transition
-// and freeze is serialized by a single mutex, a written terminal state is never
-// overwritten by a second transition, and once frozen the builder rejects all
-// further mutation. This lets subtasks at any concurrency update the same
-// builder without racing on coverage.
+// and freeze is serialized by a single mutex. The lifecycle has two explicit
+// boundaries beyond the mutex:
+//
+//   - sealed: after SealSelected the selected set is closed; RegisterSelected
+//     then returns an error. The pre-dispatch pass registers every planned item
+//     and seals immediately, before resume reuse or concurrent dispatch, so the
+//     coverage denominator can never be widened mid-run.
+//   - frozen: after Finalize the whole builder is immutable; every mutating call
+//     returns an error and Finalize returns the same frozen manifest.
+//
+// A written terminal state is never overwritten by a conflicting later
+// transition (that returns an error); the same outcome applied twice is
+// idempotent.
 type ManifestBuilder struct {
 	mu    sync.Mutex
 	items map[string]*builderItem
@@ -175,9 +320,9 @@ type ManifestBuilder struct {
 	input       ManifestInput
 	execution   ManifestExecution
 
-	runLevelFailure bool
-	sweepClass      FailureClass // classification for items still selected at Finalize
+	runFailure *RunFailure
 
+	sealed bool
 	frozen bool
 	result *RunManifest
 }
@@ -192,7 +337,8 @@ func NewManifestBuilder(runID, operation string) *ManifestBuilder {
 	}
 }
 
-// SetParentRunID links this run to the session it resumed from.
+// SetParentRunID links this run to the session it resumed from. It only records
+// the direct parent; the parent's input is never copied into this run.
 func (b *ManifestBuilder) SetParentRunID(parent string) {
 	if b == nil {
 		return
@@ -216,7 +362,8 @@ func (b *ManifestBuilder) SetRepository(repo ManifestRepository) {
 	}
 }
 
-// SetInput sets the frozen, resolved input identity.
+// SetInput sets the frozen, resolved input identity (including the mandatory
+// Mode). Finalize rejects an invalid or missing Mode.
 func (b *ManifestBuilder) SetInput(in ManifestInput) {
 	if b == nil {
 		return
@@ -240,30 +387,67 @@ func (b *ManifestBuilder) SetExecution(ex ManifestExecution) {
 	}
 }
 
+// SetRunFailure records why the whole run stopped. It rejects an invalid class
+// (so an unclassifiable stop is never silently downgraded) and a change of an
+// already-set class (the first recorded stop cause wins); re-recording the same
+// class is idempotent. reason is passed through sanitizeReason as a redaction
+// floor. Callers must record the cause at the trigger site — Finalize never
+// infers it from context state.
+func (b *ManifestBuilder) SetRunFailure(class RunFailureClass, reason string) error {
+	if b == nil {
+		return errNilBuilder
+	}
+	if !class.valid() {
+		return fmt.Errorf("manifest: invalid run_failure class %q", class)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.frozen {
+		return errFrozen
+	}
+	if b.runFailure != nil {
+		if b.runFailure.Classification == class {
+			return nil
+		}
+		return fmt.Errorf("manifest: run_failure already set to %q, cannot change to %q",
+			b.runFailure.Classification, class)
+	}
+	b.runFailure = &RunFailure{Classification: class, Reason: sanitizeReason(reason)}
+	return nil
+}
+
 // RegisterSelected records an item in the selected set (the coverage
-// denominator). It must be called once per item after filtering and before
-// dispatch. Re-registering an already-known item_id is ignored so the first
-// registration wins; registration after freeze is a no-op.
+// denominator). It must be called once per item during the pre-dispatch pass,
+// after filtering and before SealSelected. Re-registering an already-known
+// item_id keeps the first registration (idempotent). Registration after seal or
+// after freeze returns an error, so the denominator can never be widened once
+// dispatch has begun.
 //
 // The caller MUST register only the post-deletion, post-filter dispatchable set:
 // files excluded before planning (deleted files, path/extension-filtered files)
 // must NOT be registered, because every registered item that never receives a
 // Mark* is swept to failed at Finalize — registering a non-dispatchable file
 // would fabricate a bogus failure and misreport the run as partial.
-func (b *ManifestBuilder) RegisterSelected(item CoverageItem) {
-	if b == nil || item.ItemID == "" {
-		return
+func (b *ManifestBuilder) RegisterSelected(item CoverageItem) error {
+	if b == nil {
+		return errNilBuilder
+	}
+	if item.ItemID == "" {
+		return errEmptyID
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.frozen {
-		return
+		return errFrozen
+	}
+	if b.sealed {
+		return errSealed
 	}
 	if b.items == nil {
 		b.items = make(map[string]*builderItem)
 	}
 	if _, exists := b.items[item.ItemID]; exists {
-		return
+		return nil // first registration wins; idempotent
 	}
 	sel := CoverageItem{
 		ItemID:      item.ItemID,
@@ -272,36 +456,86 @@ func (b *ManifestBuilder) RegisterSelected(item CoverageItem) {
 		Fingerprint: item.Fingerprint,
 	}
 	b.items[item.ItemID] = &builderItem{item: sel, state: stateSelected}
+	return nil
 }
 
-// transition moves a selected item to a terminal state. The first terminal
-// state wins: a later call for the same item is ignored, so a completed item is
-// never demoted to failed by a late error path. Transitions for unknown items
-// or after freeze are no-ops.
-func (b *ManifestBuilder) transition(itemID string, to itemState, class FailureClass, reason string) {
-	if b == nil || itemID == "" {
-		return
+// SealSelected closes the selected set. After it returns, RegisterSelected fails
+// and the coverage denominator is fixed; per-item Mark* calls continue to work
+// against the sealed set. It is idempotent and separate from freeze: sealing
+// happens once the pre-dispatch pass has registered every planned item, before
+// resume reuse and concurrent dispatch.
+func (b *ManifestBuilder) SealSelected() error {
+	if b == nil {
+		return errNilBuilder
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.frozen {
-		return
+		return errFrozen
+	}
+	b.sealed = true
+	return nil
+}
+
+// Sealed reports whether the selected set has been sealed.
+func (b *ManifestBuilder) Sealed() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sealed
+}
+
+// transition moves a selected item to a terminal state through the single
+// coverage entry point. Unknown item_id, an invalid failed classification, an
+// empty waive reason, a conflicting transition (a different terminal state than
+// already recorded) and any call after freeze all return an error rather than
+// silently no-op'ing. Re-applying the same terminal state is idempotent.
+func (b *ManifestBuilder) transition(itemID string, to itemState, class FailureClass, reason string) error {
+	if b == nil {
+		return errNilBuilder
+	}
+	if itemID == "" {
+		return errEmptyID
+	}
+	// Validate the payload before taking the lock so an invalid class/reason is
+	// rejected regardless of the item's current state.
+	if to == stateFailed && !class.valid() {
+		return fmt.Errorf("manifest: invalid failure class %q for item %s", class, itemID)
+	}
+	sanitized := ""
+	if to == stateFailed || to == stateWaived {
+		sanitized = sanitizeReason(reason)
+		if to == stateWaived && strings.TrimSpace(sanitized) == "" {
+			return fmt.Errorf("manifest: waived item %s requires a non-empty reason", itemID)
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.frozen {
+		return errFrozen
 	}
 	bi, ok := b.items[itemID]
-	if !ok || bi.state != stateSelected {
-		return
+	if !ok {
+		return fmt.Errorf("manifest: transition on unknown item %s", itemID)
+	}
+	if bi.state != stateSelected {
+		if bi.state == to {
+			return nil // idempotent: same outcome re-applied
+		}
+		return fmt.Errorf("manifest: item %s already %s, cannot transition to %s",
+			itemID, bi.state, to)
 	}
 	bi.state = to
 	if to == stateFailed {
-		if !class.valid() {
-			class = FailureUnknown
-		}
 		bi.item.Classification = class
-		bi.item.Reason = sanitizeReason(reason)
+		bi.item.Reason = sanitized
 	}
 	if to == stateWaived {
-		bi.item.Reason = sanitizeReason(reason)
+		bi.item.Reason = sanitized
 	}
+	return nil
 }
 
 // maxReasonLen bounds the redacted failure/waive summary stored in the manifest,
@@ -370,60 +604,30 @@ func sanitizeReason(s string) string {
 
 // MarkCompleted records that the item's subtask completed. Whether it produced
 // comments does not affect completion.
-func (b *ManifestBuilder) MarkCompleted(itemID string) {
-	b.transition(itemID, stateCompleted, "", "")
+func (b *ManifestBuilder) MarkCompleted(itemID string) error {
+	return b.transition(itemID, stateCompleted, "", "")
 }
 
 // MarkReused records that the item was reused from a parent session checkpoint.
-func (b *ManifestBuilder) MarkReused(itemID string) {
-	b.transition(itemID, stateReused, "", "")
+func (b *ManifestBuilder) MarkReused(itemID string) error {
+	return b.transition(itemID, stateReused, "", "")
 }
 
-// MarkFailed records that the item failed. An invalid or empty class is stored
-// as FailureUnknown. reason must already be a redacted summary.
-func (b *ManifestBuilder) MarkFailed(itemID string, class FailureClass, reason string) {
-	b.transition(itemID, stateFailed, class, reason)
+// MarkFailed records that the item failed. class must be a valid, specific
+// failure class — an empty or unknown-string class is rejected rather than
+// downgraded, so an unclassified failure is never fabricated. reason must
+// already be a redacted summary; the builder redacts again as a floor.
+func (b *ManifestBuilder) MarkFailed(itemID string, class FailureClass, reason string) error {
+	return b.transition(itemID, stateFailed, class, reason)
 }
 
 // MarkWaived records that the user explicitly waived this selected item, which
-// must still be in the pre-terminal (selected) state — waiving an item that has
-// already reached a terminal state is a no-op, preserving the first-terminal-
-// wins rule. In the resume flow an item that failed in the parent session is
-// re-registered as selected in this child run and waived here; the parent
-// manifest is never modified. reason is required by the contract but not
-// enforced at this layer.
-func (b *ManifestBuilder) MarkWaived(itemID, reason string) {
-	b.transition(itemID, stateWaived, "", reason)
-}
-
-// SetRunLevelFailure marks a failure that happened before or independently of
-// per-item selection (e.g. diff resolution failed). It forces the terminal
-// state to failed regardless of coverage.
-func (b *ManifestBuilder) SetRunLevelFailure() {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.frozen {
-		b.runLevelFailure = true
-	}
-}
-
-// SetSweepClass sets the failure classification applied to items still in the
-// selected state when Finalize sweeps them. Callers set this when the run ended
-// in a way that colors all undispatched items uniformly — FailureCancelled on
-// user cancel, FailureBudget on a budget/round-limit stop. It defaults to
-// FailureUnknown; invalid classes are ignored.
-func (b *ManifestBuilder) SetSweepClass(class FailureClass) {
-	if b == nil || !class.valid() {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.frozen {
-		b.sweepClass = class
-	}
+// must still be in the pre-terminal (selected) state. reason is required and
+// must be non-empty. In the resume flow an item that failed in the parent
+// session is re-registered as selected in this child run and waived here; the
+// parent manifest is never modified.
+func (b *ManifestBuilder) MarkWaived(itemID, reason string) error {
+	return b.transition(itemID, stateWaived, "", reason)
 }
 
 // Frozen reports whether Finalize has already run.
@@ -436,82 +640,144 @@ func (b *ManifestBuilder) Frozen() bool {
 	return b.frozen
 }
 
-// Finalize sweeps any item that never received a terminal state into failed
-// (with the configured sweep class, default unknown), computes the terminal
-// state from the coverage sets, freezes the builder and returns the immutable
-// manifest. It is idempotent: later calls return the same frozen manifest
-// (as an independent copy) and ignore elapsed.
-func (b *ManifestBuilder) Finalize(elapsed time.Duration) RunManifest {
+// Finalize performs the hard-validated close of the run and returns the
+// immutable manifest. In order it: sweeps any item still selected into failed
+// (colored by the recorded run_failure class, else unknown); builds the five
+// coverage sets; validates the contract invariants (non-empty run_id/operation,
+// a valid input.mode, the set partition, a valid class on every failed item, a
+// non-empty reason on every waived item, and a valid run_failure class if set);
+// attaches run_failure; computes the terminal state (run_failure forces failed
+// while keeping recorded outcomes) and freezes the builder.
+//
+// A validation failure returns a non-nil error and does NOT freeze the builder,
+// so the caller sees a construction failure rather than an invalid v1 manifest.
+// On success Finalize is idempotent: later calls return the same frozen manifest
+// (as an independent copy) and ignore elapsed. Finalize never infers a stop
+// cause from context state — callers record run_failure at the trigger site.
+func (b *ManifestBuilder) Finalize(elapsed time.Duration) (RunManifest, error) {
 	if b == nil {
-		// Consistent with the nil-receiver guards on every other method: a nil
-		// builder yields a well-formed, empty manifest (non-nil coverage arrays)
-		// rather than panicking on b.mu.Lock().
-		return RunManifest{
-			SchemaVersion: ManifestSchemaVersion,
-			TerminalState: StateSkipped,
-			Coverage: Coverage{
-				Selected:  []CoverageItem{},
-				Completed: []CoverageItem{},
-				Reused:    []CoverageItem{},
-				Failed:    []CoverageItem{},
-				Waived:    []CoverageItem{},
-			},
-		}
+		return emptyManifest(), errNilBuilder
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.frozen && b.result != nil {
-		return b.result.cloned()
+		return b.result.cloned(), nil
 	}
 
 	// Backstop: no selected item may be left without an outcome. This covers
 	// goroutines that exited early, cancellation before dispatch, or any path
-	// the caller forgot. Undecided items take the run-level sweep class
-	// (cancelled/budget when the caller set it, else unknown). It only runs
-	// when the process can still execute finalize; a hard kill falls back to
-	// the per-item checkpoints.
-	sweepClass := b.sweepClass
-	if !sweepClass.valid() {
-		sweepClass = FailureUnknown
+	// the caller forgot. When a run_failure is set, undecided items take its
+	// matching item class; otherwise they fall back to unknown. It only runs
+	// when the process can still execute Finalize; a hard kill falls back to the
+	// per-item checkpoints.
+	sweepClass := FailureUnknown
+	sweepReason := "no terminal outcome recorded"
+	if b.runFailure != nil {
+		sweepClass = itemFailureForRunClass(b.runFailure.Classification)
+		if r := b.runFailure.Reason; r != "" {
+			sweepReason = r
+		}
 	}
 	for _, bi := range b.items {
 		if bi.state == stateSelected {
 			bi.state = stateFailed
 			bi.item.Classification = sweepClass
 			if bi.item.Reason == "" {
-				bi.item.Reason = "no terminal outcome recorded"
+				bi.item.Reason = sweepReason
 			}
 		}
 	}
 
 	cov := b.buildCoverageLocked()
+	if err := b.validateLocked(cov); err != nil {
+		return RunManifest{}, err
+	}
 	m := RunManifest{
 		SchemaVersion: ManifestSchemaVersion,
 		RunID:         b.runID,
 		ParentRunID:   b.parentRunID,
 		Operation:     b.operation,
-		TerminalState: b.computeTerminalLocked(cov),
+		TerminalState: computeTerminal(cov, b.runFailure),
 		Repository:    b.repository,
 		Input:         b.input,
 		Execution:     b.execution,
 		Coverage:      cov,
+		RunFailure:    b.runFailure,
 		ElapsedMS:     elapsed.Milliseconds(),
 	}
 	b.frozen = true
 	b.result = &m
-	return b.result.cloned()
+	return b.result.cloned(), nil
+}
+
+// emptyManifest is the well-formed, empty skipped manifest returned alongside an
+// error from a nil-builder Finalize, so a mistaken nil receiver never panics and
+// its coverage arrays still render as [] rather than null.
+func emptyManifest() RunManifest {
+	return RunManifest{
+		SchemaVersion: ManifestSchemaVersion,
+		TerminalState: StateSkipped,
+		Coverage: Coverage{
+			Selected:  []CoverageItem{},
+			Completed: []CoverageItem{},
+			Reused:    []CoverageItem{},
+			Failed:    []CoverageItem{},
+			Waived:    []CoverageItem{},
+		},
+	}
+}
+
+// validateLocked enforces the contract invariants at Finalize. Caller holds b.mu.
+func (b *ManifestBuilder) validateLocked(cov Coverage) error {
+	if b.runID == "" {
+		return errors.New("manifest: empty run_id")
+	}
+	if b.operation == "" {
+		return errors.New("manifest: empty operation")
+	}
+	if !validInputMode(b.input.Mode) {
+		return fmt.Errorf("manifest: invalid input.mode %q", b.input.Mode)
+	}
+	// selected must be the disjoint union of the four terminal sets. The internal
+	// map already guarantees a single state per item_id, so this is a size check
+	// plus per-item field checks.
+	partition := len(cov.Completed) + len(cov.Reused) + len(cov.Failed) + len(cov.Waived)
+	if partition != len(cov.Selected) {
+		return fmt.Errorf("manifest: coverage partition mismatch: selected=%d, terminal sum=%d",
+			len(cov.Selected), partition)
+	}
+	for _, it := range cov.Failed {
+		if !it.Classification.valid() {
+			return fmt.Errorf("manifest: failed item %s has invalid classification %q",
+				it.ItemID, it.Classification)
+		}
+	}
+	for _, it := range cov.Waived {
+		if it.Reason == "" {
+			return fmt.Errorf("manifest: waived item %s missing reason", it.ItemID)
+		}
+	}
+	if b.runFailure != nil && !b.runFailure.Classification.valid() {
+		return fmt.Errorf("manifest: invalid run_failure class %q", b.runFailure.Classification)
+	}
+	return nil
 }
 
 // cloned returns a copy of the manifest whose coverage slices are owned copies,
 // so every Finalize caller gets an independent, non-aliased snapshot. The
 // "immutable" contract then holds even against a consumer that mutates in place.
-// Slices are always non-nil so JSON renders "[]" rather than null.
+// Slices are always non-nil so JSON renders "[]" rather than null. RunFailure is
+// deep-copied so a caller cannot mutate the builder's stored value.
 func (m RunManifest) cloned() RunManifest {
 	m.Coverage.Selected = cloneItems(m.Coverage.Selected)
 	m.Coverage.Completed = cloneItems(m.Coverage.Completed)
 	m.Coverage.Reused = cloneItems(m.Coverage.Reused)
 	m.Coverage.Failed = cloneItems(m.Coverage.Failed)
 	m.Coverage.Waived = cloneItems(m.Coverage.Waived)
+	if m.RunFailure != nil {
+		rf := *m.RunFailure
+		m.RunFailure = &rf
+	}
 	return m
 }
 
@@ -558,11 +824,12 @@ func (b *ManifestBuilder) buildCoverageLocked() Coverage {
 	return cov
 }
 
-// computeTerminalLocked derives the terminal state purely from coverage.
-// Caller must hold b.mu. After the Finalize sweep every item is terminal, so
-// "no failed" means all completed/reused/waived.
-func (b *ManifestBuilder) computeTerminalLocked(cov Coverage) TerminalState {
-	if b.runLevelFailure {
+// computeTerminal derives the terminal state from coverage plus run_failure.
+// A run_failure forces failed while leaving the recorded outcomes intact. After
+// the Finalize sweep every item is terminal, so "no failed" means all
+// completed/reused/waived.
+func computeTerminal(cov Coverage, rf *RunFailure) TerminalState {
+	if rf != nil {
 		return StateFailed
 	}
 	selected := len(cov.Selected)

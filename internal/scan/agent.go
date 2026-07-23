@@ -564,7 +564,7 @@ func (a *Agent) executeSubtask(ctx context.Context, it model.ScanItem) error {
 		return nil
 	}
 
-	_, err := a.runner.RunPerFile(ctx, messages, it.Path)
+	_, _, err := a.runner.RunPerFile(ctx, messages, it.Path)
 	return err
 }
 

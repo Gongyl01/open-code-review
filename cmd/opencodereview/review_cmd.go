@@ -116,9 +116,11 @@ func runReview(args []string) error {
 		MaxConcurrency:        opts.concurrency,
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 rt.Model,
+		Provider:              rt.Provider,
 		Background:            opts.background,
 		GitRunner:             cc.GitRunner,
 		Resume:                resumeState,
+		RuntimeConfig:         rt.RuntimeConfig,
 	})
 
 	// Silence progress output during execution; restored before the trace
