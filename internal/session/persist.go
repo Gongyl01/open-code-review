@@ -295,6 +295,37 @@ func (jw *jsonlWriter) WriteLLMError(filePath string, taskType TaskType, request
 	return uuid
 }
 
+// WriteCompressionApplied records a compression result that was actually
+// installed into the live conversation. Compression requests that fail or are
+// abandoned keep their existing llm_error/request records and do not emit this
+// event.
+func (jw *jsonlWriter) WriteCompressionApplied(filePath string, requestNo int, trigger, strategy string, thresholdPercent, beforeTokens, afterTokens int) string {
+	uuid := generateUUID()
+
+	jw.mu.Lock()
+	defer jw.mu.Unlock()
+	rec := map[string]any{
+		"uuid":                    uuid,
+		"parentUuid":              jw.lastUUID,
+		"type":                    "compression_applied",
+		"sessionId":               jw.sessionID,
+		"timestamp":               time.Now().UTC().Format(time.RFC3339),
+		"filePath":                filePath,
+		"taskType":                string(MemoryCompressionTask),
+		"trigger":                 trigger,
+		"strategy":                strategy,
+		"threshold_percent":       thresholdPercent,
+		"before_tokens_estimated": beforeTokens,
+		"after_tokens_estimated":  afterTokens,
+	}
+	if requestNo > 0 {
+		rec["request_no"] = requestNo
+	}
+	jw.writeRecordLocked(rec)
+	jw.lastUUID = uuid
+	return uuid
+}
+
 // WriteToolCall writes a tool call result entry.
 func (jw *jsonlWriter) WriteToolCall(filePath string, taskType TaskType, toolName, arguments, result string, ok bool, duration time.Duration) string {
 	uuid := generateUUID()

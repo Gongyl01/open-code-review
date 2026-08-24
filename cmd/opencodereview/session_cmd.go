@@ -311,6 +311,11 @@ func printSessionDetail(w io.Writer, s *session.Summary, items []session.ItemDet
 	if s.LLMFailures > 0 {
 		fmt.Fprintf(w, "  LLM err:   %d\n", s.LLMFailures)
 	}
+	if s.Compaction != nil {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Run diagnostics:")
+		fmt.Fprintf(w, "  Context compaction: %s\n", describeCompaction(*s.Compaction))
+	}
 
 	if len(items) == 0 {
 		return
@@ -330,6 +335,22 @@ func printSessionDetail(w io.Writer, s *session.Summary, items []session.ItemDet
 		fmt.Fprintf(tw, "  %s\t%s\t%d\t%s\n", it.Type, it.FilePath, it.Comments, note)
 	}
 	tw.Flush()
+}
+
+func describeCompaction(c session.CompactionSummary) string {
+	times := "times"
+	if c.Count == 1 {
+		times = "time"
+	}
+	prefix := fmt.Sprintf("%d %s (%d async, %d sync)", c.Count, times, c.ByTrigger.SoftAsync, c.ByTrigger.WarningSync)
+	switch {
+	case c.SavedTokensEstimated > 0:
+		return fmt.Sprintf("%s, ~%d estimated tokens reclaimed", prefix, c.SavedTokensEstimated)
+	case c.SavedTokensEstimated < 0:
+		return fmt.Sprintf("%s, ~%d estimated tokens added", prefix, -c.SavedTokensEstimated)
+	default:
+		return prefix + ", no estimated token change"
+	}
 }
 
 // describeTarget renders a provider/model pair for the transition line. Either

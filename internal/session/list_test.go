@@ -96,6 +96,9 @@ func TestLoadDetail_ReturnsItems(t *testing.T) {
 	if summary.Aborted {
 		t.Errorf("summary should not be aborted after Finalize")
 	}
+	if summary.Compaction != nil {
+		t.Fatalf("session without compression events has compaction summary: %+v", summary.Compaction)
+	}
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
 	}
@@ -111,6 +114,44 @@ func TestLoadDetail_ReturnsItems(t *testing.T) {
 	}
 	if done := byType["done"]; done.Comments != 1 {
 		t.Errorf("done comments = %d, want 1", done.Comments)
+	}
+}
+
+func TestLoadDetailAggregatesAppliedCompactions(t *testing.T) {
+	tmpHome := t.TempDir()
+	setTestHome(t, tmpHome)
+	repoDir := t.TempDir()
+
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	sh.RecordCompressionApplied("a.go", 1, "soft_async", "summary", 60, 38_200, 21_900)
+	sh.RecordCompressionApplied("a.go", 2, "warning_sync", "summary", 80, 30_000, 20_000)
+	if err := sh.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, _, err := LoadDetail(repoDir, sh.SessionID)
+	if err != nil {
+		t.Fatalf("LoadDetail: %v", err)
+	}
+	if summary.Compaction == nil {
+		t.Fatal("compaction summary is nil")
+	}
+	if summary.Compaction.Count != 2 {
+		t.Errorf("count = %d, want 2", summary.Compaction.Count)
+	}
+	if summary.Compaction.ByTrigger.SoftAsync != 1 || summary.Compaction.ByTrigger.WarningSync != 1 {
+		t.Errorf("by_trigger = %+v, want one of each", summary.Compaction.ByTrigger)
+	}
+	if summary.Compaction.SavedTokensEstimated != 26_300 {
+		t.Errorf("saved_tokens_estimated = %d, want 26300", summary.Compaction.SavedTokensEstimated)
+	}
+
+	listed, err := ListSessions(repoDir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Compaction != nil {
+		t.Fatalf("session list must not include detail diagnostics: %+v", listed)
 	}
 }
 

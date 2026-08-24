@@ -5,7 +5,9 @@ package llmloop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +96,41 @@ func newTestRunner(client llm.LLMClient, tpl template.Template) *Runner {
 }
 
 var t_tempDir string
+
+func readRunnerSessionRecords(t *testing.T, r *Runner) []map[string]any {
+	t.Helper()
+	if err := r.deps.Session.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	path, err := session.SessionFilePath(t_tempDir, r.deps.Session.SessionID)
+	if err != nil {
+		t.Fatalf("SessionFilePath: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("unmarshal session record: %v", err)
+		}
+		records = append(records, rec)
+	}
+	return records
+}
+
+func compressionAppliedRecord(t *testing.T, records []map[string]any) map[string]any {
+	t.Helper()
+	for _, rec := range records {
+		if rec["type"] == "compression_applied" {
+			return rec
+		}
+	}
+	t.Fatal("compression_applied record not found")
+	return nil
+}
 
 func TestRecordWarning(t *testing.T) {
 	t_tempDir = t.TempDir()
@@ -240,6 +277,9 @@ func TestTryApplyPendingCompression_Applied(t *testing.T) {
 		cancel:      func() {},
 		rebuilt:     rebuilt,
 		snapshotLen: 3,
+		filePath:    "a.go,b.go",
+		strategy:    compressionStrategySummary,
+		requestNo:   2,
 	}
 	close(job.done)
 	st := &compressionState{pendingJob: job}
@@ -250,6 +290,7 @@ func TestTryApplyPendingCompression_Applied(t *testing.T) {
 		msg("assistant", "resp"),
 		msg("tool", "appended after snapshot"),
 	}
+	beforeTokens := CountMessagesTokens(msgs)
 	applied := r.tryApplyPendingCompression(st, &msgs)
 	if !applied {
 		t.Fatal("expected applied=true")
@@ -265,6 +306,28 @@ func TestTryApplyPendingCompression_Applied(t *testing.T) {
 	}
 	if st.pendingJob != nil {
 		t.Error("pendingJob should be nil after apply")
+	}
+	rec := compressionAppliedRecord(t, readRunnerSessionRecords(t, r))
+	if rec["filePath"] != "a.go,b.go" {
+		t.Errorf("filePath = %v, want a.go,b.go", rec["filePath"])
+	}
+	if rec["trigger"] != compressionTriggerSoftAsync {
+		t.Errorf("trigger = %v, want %s", rec["trigger"], compressionTriggerSoftAsync)
+	}
+	if rec["strategy"] != compressionStrategySummary {
+		t.Errorf("strategy = %v, want %s", rec["strategy"], compressionStrategySummary)
+	}
+	if rec["taskType"] != string(session.MemoryCompressionTask) {
+		t.Errorf("taskType = %v, want %s", rec["taskType"], session.MemoryCompressionTask)
+	}
+	if rec["request_no"] != float64(2) {
+		t.Errorf("request_no = %v, want 2", rec["request_no"])
+	}
+	if rec["threshold_percent"] != float64(60) {
+		t.Errorf("threshold_percent = %v, want 60", rec["threshold_percent"])
+	}
+	if rec["before_tokens_estimated"] != float64(beforeTokens) {
+		t.Errorf("before_tokens_estimated = %v, want %d", rec["before_tokens_estimated"], beforeTokens)
 	}
 }
 
@@ -328,12 +391,15 @@ func TestRunCompression_EmptyTemplate(t *testing.T) {
 		msg("user", "prompt"),
 		msg("assistant", "resp"),
 	}
-	got, err := r.runCompression(context.Background(), msgs, "test.go")
+	got, application, err := r.runCompression(context.Background(), msgs, "test.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 2 {
 		t.Errorf("expected 2 (frozen only), got %d", len(got))
+	}
+	if !application.applied() || application.strategy != compressionStrategyTruncate || application.requestNo != 0 {
+		t.Errorf("application = %+v, want hard truncate without request", application)
 	}
 }
 
@@ -348,12 +414,15 @@ func TestRunCompression_ShortMessages(t *testing.T) {
 	r := newTestRunner(&fakeLLMClient{}, tpl)
 
 	msgs := []llm.Message{msg("system", "sys"), msg("user", "prompt")}
-	got, err := r.runCompression(context.Background(), msgs, "test.go")
+	got, application, err := r.runCompression(context.Background(), msgs, "test.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 2 {
 		t.Errorf("expected 2, got %d", len(got))
+	}
+	if application.applied() {
+		t.Errorf("application = %+v, want unchanged", application)
 	}
 }
 
@@ -385,9 +454,15 @@ func TestRunCompression_Success(t *testing.T) {
 		msgs = append(msgs, msg("tool", strings.Repeat("data ", 50)))
 	}
 
-	got, err := r.runCompression(context.Background(), msgs, "test.go")
+	got, application, err := r.runCompression(context.Background(), msgs, "test.go")
 	if err != nil {
 		t.Fatalf("runCompression: %v", err)
+	}
+	if !application.applied() {
+		t.Fatal("expected compression to change the conversation")
+	}
+	if application.strategy != compressionStrategySummary || application.requestNo != 1 {
+		t.Errorf("application = %+v, want summary request 1", application)
 	}
 	if len(got) < 2 {
 		t.Fatalf("expected at least 2 messages, got %d", len(got))
@@ -422,7 +497,7 @@ func TestRunCompression_LLMError(t *testing.T) {
 		msgs = append(msgs, msg("tool", strings.Repeat("data ", 50)))
 	}
 
-	got, err := r.runCompression(context.Background(), msgs, "test.go")
+	got, _, err := r.runCompression(context.Background(), msgs, "test.go")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -458,9 +533,12 @@ func TestRunCompression_EmptySummary(t *testing.T) {
 		msgs = append(msgs, msg("tool", strings.Repeat("data ", 50)))
 	}
 
-	got, err := r.runCompression(context.Background(), msgs, "test.go")
+	got, application, err := r.runCompression(context.Background(), msgs, "test.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if application.applied() {
+		t.Fatal("empty summary must not count as an applied compression")
 	}
 	if len(got) != len(msgs) {
 		t.Errorf("expected messages unchanged on empty summary, got %d vs %d", len(got), len(msgs))
@@ -663,6 +741,27 @@ func TestAddNextMessage_NoStartThenCancelSameCall(t *testing.T) {
 	}
 	if !strings.Contains(msgs[1].ExtractText(), "<previous_review_summary>") {
 		t.Errorf("sync compression should have rebuilt the prompt, got: %s", msgs[1].ExtractText())
+	}
+	rec := compressionAppliedRecord(t, readRunnerSessionRecords(t, r))
+	if rec["trigger"] != compressionTriggerWarningSync {
+		t.Errorf("trigger = %v, want %s", rec["trigger"], compressionTriggerWarningSync)
+	}
+	if rec["strategy"] != compressionStrategySummary {
+		t.Errorf("strategy = %v, want %s", rec["strategy"], compressionStrategySummary)
+	}
+	if rec["taskType"] != string(session.MemoryCompressionTask) {
+		t.Errorf("taskType = %v, want %s", rec["taskType"], session.MemoryCompressionTask)
+	}
+	if rec["request_no"] != float64(1) {
+		t.Errorf("request_no = %v, want 1", rec["request_no"])
+	}
+	if rec["threshold_percent"] != float64(80) {
+		t.Errorf("threshold_percent = %v, want 80", rec["threshold_percent"])
+	}
+	before, _ := rec["before_tokens_estimated"].(float64)
+	after, _ := rec["after_tokens_estimated"].(float64)
+	if before <= after {
+		t.Errorf("token estimates = %.0f -> %.0f, want a reduction", before, after)
 	}
 }
 

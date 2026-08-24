@@ -307,6 +307,19 @@ func (sh *SessionHistory) RecordReviewItemFailed(filePath, oldPath, newPath, fin
 	}
 }
 
+// RecordCompressionApplied persists an applied context-compression event. It
+// deliberately records only results that entered the live conversation;
+// failed requests already have llm_error records, while abandoned background
+// work cannot affect later model behavior.
+func (sh *SessionHistory) RecordCompressionApplied(filePath string, requestNo int, trigger, strategy string, thresholdPercent, beforeTokens, afterTokens int) {
+	if sh == nil {
+		return
+	}
+	if p := sh.persist; p != nil {
+		p.WriteCompressionApplied(filePath, requestNo, trigger, strategy, thresholdPercent, beforeTokens, afterTokens)
+	}
+}
+
 // Finalize marks the session as complete, sets the end time, and persists the
 // final summary record. When a frozen manifest was stored via SetFinalManifest
 // it is embedded into session_end as run_manifest, which is the last physical

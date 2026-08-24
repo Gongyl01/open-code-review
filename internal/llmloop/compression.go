@@ -20,6 +20,11 @@ import (
 const (
 	tokenSoftThreshold    = 0.60 // async background compression
 	tokenWarningThreshold = 0.80 // immediate sync compression
+
+	compressionTriggerSoftAsync   = "soft_async"
+	compressionTriggerWarningSync = "warning_sync"
+	compressionStrategySummary    = "summary"
+	compressionStrategyTruncate   = "hard_truncate"
 )
 
 // PromptTokenLimit returns tokenWarningThreshold (80%) of maxTokens. It is
@@ -45,12 +50,24 @@ type partitionResult struct {
 	activeCount int
 }
 
+type compressionApplication struct {
+	strategy  string
+	requestNo int // zero when the strategy does not make an LLM request
+}
+
+func (a compressionApplication) applied() bool {
+	return a.strategy != ""
+}
+
 // compressionJob tracks an in-flight background compression operation.
 type compressionJob struct {
 	done        chan struct{}
 	rebuilt     []llm.Message
 	cancel      context.CancelFunc
 	snapshotLen int // message count when the snapshot was taken
+	filePath    string
+	strategy    string
+	requestNo   int
 }
 
 // compressionState is the async-compression bookkeeping for a single
@@ -209,14 +226,18 @@ func copyMessages(msgs []llm.Message) []llm.Message {
 // messages, summarizing the compress zone while preserving the active zone
 // intact. Returns rebuilt as [frozen] + [compressed_summary appended to
 // the user prompt] + [active].
-func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, filePath string) ([]llm.Message, error) {
+func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, filePath string) ([]llm.Message, compressionApplication, error) {
 	if len(r.deps.Template.MemoryCompressionTask.Messages) == 0 || len(msgs) <= 2 {
-		return msgs[:min(len(msgs), 2)], nil
+		rebuilt := msgs[:min(len(msgs), 2)]
+		if len(rebuilt) != len(msgs) {
+			return rebuilt, compressionApplication{strategy: compressionStrategyTruncate}, nil
+		}
+		return rebuilt, compressionApplication{}, nil
 	}
 
 	part := partitionMessages(msgs, r.deps.Template.MaxTokens, 0)
 	if part.compressEnd <= part.frozenEnd {
-		return msgs, nil
+		return msgs, compressionApplication{}, nil
 	}
 
 	contextXML := buildMessageXML(msgs[part.frozenEnd:part.compressEnd])
@@ -253,7 +274,7 @@ func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, filePat
 		// Return msgs unchanged: truncating to frozenEnd would discard all
 		// conversation context, which is worse than staying over the token
 		// limit temporarily.
-		return msgs, fmt.Errorf("memory compression: %w", err)
+		return msgs, compressionApplication{}, fmt.Errorf("memory compression: %w", err)
 	}
 	rec.SetResponse(resp, duration)
 	if resp.Usage != nil {
@@ -267,7 +288,7 @@ func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, filePat
 	if rawSummary == "" {
 		// Empty summary: keep the original conversation rather than dropping
 		// everything below the frozen zone.
-		return msgs, nil
+		return msgs, compressionApplication{}, nil
 	}
 
 	rebuilt := make([]llm.Message, 2)
@@ -281,7 +302,7 @@ func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, filePat
 		rebuilt = append(rebuilt, msgs[i])
 	}
 
-	return rebuilt, nil
+	return rebuilt, compressionApplication{strategy: compressionStrategySummary, requestNo: rec.RequestNo}, nil
 }
 
 // triggerAsyncCompression kicks off a background compression job for the
@@ -296,7 +317,12 @@ func (r *Runner) triggerAsyncCompression(ctx context.Context, st *compressionSta
 	}
 	msgSnapshot := copyMessages(messages)
 	asyncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
-	job := &compressionJob{done: make(chan struct{}), cancel: cancel, snapshotLen: len(messages)}
+	job := &compressionJob{
+		done:        make(chan struct{}),
+		cancel:      cancel,
+		snapshotLen: len(messages),
+		filePath:    filePath,
+	}
 	st.pendingJob = job
 	st.mu.Unlock()
 
@@ -306,7 +332,7 @@ func (r *Runner) triggerAsyncCompression(ctx context.Context, st *compressionSta
 	go func() {
 		defer r.bg.Done()
 		defer cancel()
-		rebuilt, err := r.runCompression(asyncCtx, msgSnapshot, filePath)
+		rebuilt, application, err := r.runCompression(asyncCtx, msgSnapshot, filePath)
 
 		st.mu.Lock()
 		defer st.mu.Unlock()
@@ -325,7 +351,11 @@ func (r *Runner) triggerAsyncCompression(ctx context.Context, st *compressionSta
 			close(job.done)
 			return
 		}
-		job.rebuilt = rebuilt
+		if application.applied() {
+			job.rebuilt = rebuilt
+			job.strategy = application.strategy
+			job.requestNo = application.requestNo
+		}
 		close(job.done)
 	}()
 }
@@ -345,8 +375,10 @@ func (r *Runner) tryApplyPendingCompression(st *compressionState, messages *[]ll
 	select {
 	case <-job.done:
 		applied := false
+		var beforeMessages, afterMessages []llm.Message
 		st.mu.Lock()
 		if st.pendingJob == job && job.rebuilt != nil {
+			beforeMessages = *messages
 			rebuilt := job.rebuilt
 			// Preserve any messages appended after the snapshot was taken —
 			// the background job only compressed messages[:snapshotLen].
@@ -354,12 +386,24 @@ func (r *Runner) tryApplyPendingCompression(st *compressionState, messages *[]ll
 				rebuilt = append(rebuilt, (*messages)[job.snapshotLen:]...)
 			}
 			*messages = rebuilt
+			afterMessages = rebuilt
 			applied = true
 		}
 		if st.pendingJob == job {
 			st.pendingJob = nil
 		}
 		st.mu.Unlock()
+		if applied {
+			r.deps.Session.RecordCompressionApplied(
+				job.filePath,
+				job.requestNo,
+				compressionTriggerSoftAsync,
+				job.strategy,
+				int(tokenSoftThreshold*100),
+				CountMessagesTokens(beforeMessages),
+				CountMessagesTokens(afterMessages),
+			)
+		}
 		return applied
 	default:
 		return false

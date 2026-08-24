@@ -18,33 +18,49 @@ import (
 // Summary is a compact digest of one persisted session, suitable for
 // listing recent runs.
 type Summary struct {
-	SessionID      string        `json:"session_id"`
-	FilePath       string        `json:"file_path"`
-	RepoDir        string        `json:"repo_dir"`
-	GitBranch      string        `json:"git_branch,omitempty"`
-	Model          string        `json:"model,omitempty"`
-	ReviewMode     string        `json:"review_mode,omitempty"`
-	DiffFrom       string        `json:"diff_from,omitempty"`
-	DiffTo         string        `json:"diff_to,omitempty"`
-	DiffCommit     string        `json:"diff_commit,omitempty"`
-	ResumedFrom    string        `json:"resumed_from,omitempty"`
-	StartTime      time.Time     `json:"start_time"`
-	EndTime        time.Time     `json:"end_time,omitempty"`
-	Duration       time.Duration `json:"duration_ns,omitempty"`
-	SelectedFiles  int           `json:"selected_files"`
-	CompletedFiles int           `json:"completed_files"`
-	FailedFiles    int           `json:"failed_files"`
-	ReusedFiles    int           `json:"reused_files"`
-	WaivedFiles    int           `json:"waived_files"`
-	TotalComments  int           `json:"total_comments"`
-	LLMFailures    int64         `json:"llm_failures"`
-	Aborted        bool          `json:"aborted"`
-	Legacy         bool          `json:"legacy"`
-	RunManifest    *RunManifest  `json:"run_manifest,omitempty"`
+	SessionID      string             `json:"session_id"`
+	FilePath       string             `json:"file_path"`
+	RepoDir        string             `json:"repo_dir"`
+	GitBranch      string             `json:"git_branch,omitempty"`
+	Model          string             `json:"model,omitempty"`
+	ReviewMode     string             `json:"review_mode,omitempty"`
+	DiffFrom       string             `json:"diff_from,omitempty"`
+	DiffTo         string             `json:"diff_to,omitempty"`
+	DiffCommit     string             `json:"diff_commit,omitempty"`
+	ResumedFrom    string             `json:"resumed_from,omitempty"`
+	StartTime      time.Time          `json:"start_time"`
+	EndTime        time.Time          `json:"end_time,omitempty"`
+	Duration       time.Duration      `json:"duration_ns,omitempty"`
+	SelectedFiles  int                `json:"selected_files"`
+	CompletedFiles int                `json:"completed_files"`
+	FailedFiles    int                `json:"failed_files"`
+	ReusedFiles    int                `json:"reused_files"`
+	WaivedFiles    int                `json:"waived_files"`
+	TotalComments  int                `json:"total_comments"`
+	LLMFailures    int64              `json:"llm_failures"`
+	Aborted        bool               `json:"aborted"`
+	Legacy         bool               `json:"legacy"`
+	RunManifest    *RunManifest       `json:"run_manifest,omitempty"`
+	Compaction     *CompactionSummary `json:"compaction,omitempty"`
 
 	// ResumeLineage is present only for a run that resumed another, and records
 	// which run it continued and across which provider and model.
 	ResumeLineage *ResumeLineage `json:"resume_lineage,omitempty"`
+}
+
+// CompactionSummary is a detail-only view derived from compression_applied
+// records. Token values are estimates produced by the local tokenizer, not
+// provider billing values.
+type CompactionSummary struct {
+	Count                int                      `json:"count"`
+	ByTrigger            CompactionTriggerSummary `json:"by_trigger"`
+	SavedTokensEstimated int64                    `json:"saved_tokens_estimated"`
+}
+
+// CompactionTriggerSummary groups applied compactions by their runtime path.
+type CompactionTriggerSummary struct {
+	SoftAsync   int `json:"soft_async"`
+	WarningSync int `json:"warning_sync"`
 }
 
 // ItemDetail describes one file-level record within a session, used by `ocr session show`.
@@ -62,35 +78,38 @@ type ItemDetail struct {
 
 // summaryRecord is a superset of resumeRecord that also carries session_end fields.
 type summaryRecord struct {
-	Type            string          `json:"type"`
-	SessionID       string          `json:"sessionId"`
-	Timestamp       string          `json:"timestamp"`
-	Cwd             string          `json:"cwd"`
-	GitBranch       string          `json:"gitBranch"`
-	Model           string          `json:"model"`
-	ReviewMode      string          `json:"reviewMode"`
-	DiffFrom        string          `json:"diffFrom"`
-	DiffTo          string          `json:"diffTo"`
-	DiffCommit      string          `json:"diffCommit"`
-	ResumedFrom     string          `json:"resumedFrom"`
-	FilePath        string          `json:"filePath"`
-	OldPath         string          `json:"oldPath"`
-	NewPath         string          `json:"newPath"`
-	Fingerprint     string          `json:"fingerprint"`
-	SourceSessionID string          `json:"sourceSessionId"`
-	Error           string          `json:"error"`
-	Comments        json.RawMessage `json:"comments"`
-	FilesReviewed   []string        `json:"files_reviewed"`
-	DurationSeconds float64         `json:"duration_seconds"`
-	LLMFailures     int64           `json:"llm_failures"`
-	RunManifest     *RunManifest    `json:"run_manifest"`
-	SchemaVersion   string          `json:"schema_version"`
-	RunID           string          `json:"run_id"`
-	ParentRunID     string          `json:"parent_run_id"`
-	SourceProvider  string          `json:"source_provider"`
-	SourceModel     string          `json:"source_model"`
-	TargetProvider  string          `json:"target_provider"`
-	TargetModel     string          `json:"target_model"`
+	Type                  string          `json:"type"`
+	SessionID             string          `json:"sessionId"`
+	Timestamp             string          `json:"timestamp"`
+	Cwd                   string          `json:"cwd"`
+	GitBranch             string          `json:"gitBranch"`
+	Model                 string          `json:"model"`
+	ReviewMode            string          `json:"reviewMode"`
+	DiffFrom              string          `json:"diffFrom"`
+	DiffTo                string          `json:"diffTo"`
+	DiffCommit            string          `json:"diffCommit"`
+	ResumedFrom           string          `json:"resumedFrom"`
+	FilePath              string          `json:"filePath"`
+	OldPath               string          `json:"oldPath"`
+	NewPath               string          `json:"newPath"`
+	Fingerprint           string          `json:"fingerprint"`
+	SourceSessionID       string          `json:"sourceSessionId"`
+	Error                 string          `json:"error"`
+	Comments              json.RawMessage `json:"comments"`
+	FilesReviewed         []string        `json:"files_reviewed"`
+	DurationSeconds       float64         `json:"duration_seconds"`
+	LLMFailures           int64           `json:"llm_failures"`
+	RunManifest           *RunManifest    `json:"run_manifest"`
+	SchemaVersion         string          `json:"schema_version"`
+	RunID                 string          `json:"run_id"`
+	ParentRunID           string          `json:"parent_run_id"`
+	SourceProvider        string          `json:"source_provider"`
+	SourceModel           string          `json:"source_model"`
+	TargetProvider        string          `json:"target_provider"`
+	TargetModel           string          `json:"target_model"`
+	Trigger               string          `json:"trigger"`
+	BeforeTokensEstimated int64           `json:"before_tokens_estimated"`
+	AfterTokensEstimated  int64           `json:"after_tokens_estimated"`
 }
 
 // SessionsDir returns the on-disk directory that holds JSONL session files
@@ -162,6 +181,7 @@ func LoadDetail(repoDir, sessionID string) (*Summary, []ItemDetail, error) {
 	var items []ItemDetail
 	err = walkSessionFile(path, func(rec summaryRecord) {
 		applyRecordToSummary(summary, rec)
+		applyRecordToCompactionSummary(summary, rec)
 		if item, ok := recordToItem(rec); ok {
 			items = append(items, item)
 		}
@@ -175,6 +195,23 @@ func LoadDetail(repoDir, sessionID string) (*Summary, []ItemDetail, error) {
 	return summary, items, nil
 }
 
+func applyRecordToCompactionSummary(s *Summary, rec summaryRecord) {
+	if rec.Type != "compression_applied" {
+		return
+	}
+	if s.Compaction == nil {
+		s.Compaction = &CompactionSummary{}
+	}
+	s.Compaction.Count++
+	s.Compaction.SavedTokensEstimated += rec.BeforeTokensEstimated - rec.AfterTokensEstimated
+	switch rec.Trigger {
+	case "soft_async":
+		s.Compaction.ByTrigger.SoftAsync++
+	case "warning_sync":
+		s.Compaction.ByTrigger.WarningSync++
+	}
+}
+
 func loadSummaryFromFile(path, sessionID, repoDir string) (*Summary, error) {
 	summary := &Summary{
 		SessionID: sessionID,
@@ -182,6 +219,8 @@ func loadSummaryFromFile(path, sessionID, repoDir string) (*Summary, error) {
 		RepoDir:   repoDir,
 		Aborted:   true,
 	}
+	// Compaction is intentionally detail-only: this reader backs session list
+	// and summary-only callers, whose output must remain unchanged.
 	if err := walkSessionFile(path, func(rec summaryRecord) {
 		applyRecordToSummary(summary, rec)
 	}); err != nil {

@@ -726,13 +726,27 @@ func (r *Runner) addNextMessage(ctx context.Context, assistantContent string, to
 
 	// A conversation can already be over the warning threshold before this
 	// round's messages are appended (e.g. an oversized initial prompt).
-	if CountMessagesTokens(*messages) > warnLimit {
+	currentCount := CountMessagesTokens(*messages)
+	if currentCount > warnLimit {
 		r.cancelPendingCompression(st)
-		var err error
-		if *messages, err = r.runCompression(ctx, *messages, filePath); err != nil {
+		beforeTokens := currentCount
+		rebuilt, application, err := r.runCompression(ctx, *messages, filePath)
+		*messages = rebuilt
+		afterTokens := CountMessagesTokens(*messages)
+		if err != nil {
 			// Compression failed; continue with over-limit messages — the
 			// post-append check below will retry.
 			fmt.Fprintf(stdout.Writer(), "[ocr] Memory compression failed: %v\n", err)
+		} else if application.applied() {
+			r.deps.Session.RecordCompressionApplied(
+				filePath,
+				application.requestNo,
+				compressionTriggerWarningSync,
+				application.strategy,
+				int(tokenWarningThreshold*100),
+				beforeTokens,
+				afterTokens,
+			)
 		}
 	}
 
@@ -749,11 +763,24 @@ func (r *Runner) addNextMessage(ctx context.Context, assistantContent string, to
 	finalCount := CountMessagesTokens(*messages)
 	if finalCount > warnLimit {
 		r.cancelPendingCompression(st)
-		var err error
-		if *messages, err = r.runCompression(ctx, *messages, filePath); err != nil {
+		beforeTokens := finalCount
+		rebuilt, application, err := r.runCompression(ctx, *messages, filePath)
+		*messages = rebuilt
+		afterTokens := CountMessagesTokens(*messages)
+		if err != nil {
 			fmt.Fprintf(stdout.Writer(), "[ocr] Memory compression failed: %v\n", err)
+		} else if application.applied() {
+			r.deps.Session.RecordCompressionApplied(
+				filePath,
+				application.requestNo,
+				compressionTriggerWarningSync,
+				application.strategy,
+				int(tokenWarningThreshold*100),
+				beforeTokens,
+				afterTokens,
+			)
 		}
-		finalCount = CountMessagesTokens(*messages)
+		finalCount = afterTokens
 	}
 
 	// Trigger async compression only after all appends for this update, so

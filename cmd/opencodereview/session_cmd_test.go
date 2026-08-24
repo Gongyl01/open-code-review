@@ -95,6 +95,8 @@ func TestRunSessionShow_Text(t *testing.T) {
 	})
 	sh.RecordReviewItemDone("a.go", "a.go", "a.go", "fp-a", []model.LlmComment{{Path: "a.go", Content: "note"}})
 	sh.RecordReviewItemFailed("bad.go", "bad.go", "bad.go", "fp-bad", "boom")
+	sh.RecordCompressionApplied("a.go", 1, "soft_async", "summary", 60, 38_200, 21_900)
+	sh.RecordCompressionApplied("a.go", 2, "warning_sync", "summary", 80, 30_000, 20_000)
 	sh.Finalize()
 
 	got := captureStdout(t, func() {
@@ -103,7 +105,16 @@ func TestRunSessionShow_Text(t *testing.T) {
 		}
 	})
 
-	for _, want := range []string{sh.SessionID, "abc123", "a.go", "bad.go", "boom", "Files:"} {
+	for _, want := range []string{
+		sh.SessionID,
+		"abc123",
+		"a.go",
+		"bad.go",
+		"boom",
+		"Run diagnostics:",
+		"Context compaction: 2 times (1 async, 1 sync), ~26300 estimated tokens reclaimed",
+		"Files:",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected output to contain %q, got %q", want, got)
 		}
@@ -120,6 +131,7 @@ func TestRunSessionShow_JSON(t *testing.T) {
 		DiffCommit: "abc123",
 	})
 	sh.RecordReviewItemDone("a.go", "a.go", "a.go", "fp-a", nil)
+	sh.RecordCompressionApplied("a.go", 1, "warning_sync", "summary", 80, 25_000, 15_000)
 	sh.Finalize()
 
 	got := captureStdout(t, func() {
@@ -138,8 +150,50 @@ func TestRunSessionShow_JSON(t *testing.T) {
 	if payload.Summary == nil || payload.Summary.SessionID != sh.SessionID {
 		t.Fatalf("summary mismatch: %+v", payload.Summary)
 	}
+	if payload.Summary.Compaction == nil || payload.Summary.Compaction.Count != 1 || payload.Summary.Compaction.SavedTokensEstimated != 10_000 {
+		t.Fatalf("compaction mismatch: %+v", payload.Summary.Compaction)
+	}
 	if len(payload.Items) != 1 || payload.Items[0].FilePath != "a.go" {
 		t.Fatalf("items = %+v", payload.Items)
+	}
+}
+
+func TestDescribeCompaction(t *testing.T) {
+	cases := []struct {
+		name  string
+		input session.CompactionSummary
+		want  string
+	}{
+		{
+			name: "singular reclaimed",
+			input: session.CompactionSummary{
+				Count:                1,
+				ByTrigger:            session.CompactionTriggerSummary{WarningSync: 1},
+				SavedTokensEstimated: 500,
+			},
+			want: "1 time (0 async, 1 sync), ~500 estimated tokens reclaimed",
+		},
+		{
+			name: "tokens added",
+			input: session.CompactionSummary{
+				Count:                2,
+				ByTrigger:            session.CompactionTriggerSummary{SoftAsync: 2},
+				SavedTokensEstimated: -50,
+			},
+			want: "2 times (2 async, 0 sync), ~50 estimated tokens added",
+		},
+		{
+			name:  "no change",
+			input: session.CompactionSummary{Count: 1},
+			want:  "1 time (0 async, 0 sync), no estimated token change",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := describeCompaction(tc.input); got != tc.want {
+				t.Errorf("describeCompaction() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -203,6 +203,71 @@ func TestSetErrorWritesJSONL(t *testing.T) {
 	}
 }
 
+func TestRecordCompressionAppliedWritesJSONL(t *testing.T) {
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	sh.RecordCompressionApplied("a.go,b.go", 2, "soft_async", "summary", 60, 38200, 21900)
+	if err := sh.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	records := readJSONLRecords(t, sessionJSONLPath(t, repoDir, sh.SessionID))
+	for _, rec := range records {
+		if rec["type"] != "compression_applied" {
+			continue
+		}
+		if rec["filePath"] != "a.go,b.go" {
+			t.Errorf("filePath = %v, want a.go,b.go", rec["filePath"])
+		}
+		if rec["trigger"] != "soft_async" {
+			t.Errorf("trigger = %v, want soft_async", rec["trigger"])
+		}
+		if rec["taskType"] != string(MemoryCompressionTask) {
+			t.Errorf("taskType = %v, want %s", rec["taskType"], MemoryCompressionTask)
+		}
+		if rec["request_no"] != float64(2) {
+			t.Errorf("request_no = %v, want 2", rec["request_no"])
+		}
+		if rec["strategy"] != "summary" {
+			t.Errorf("strategy = %v, want summary", rec["strategy"])
+		}
+		if rec["threshold_percent"] != float64(60) {
+			t.Errorf("threshold_percent = %v, want 60", rec["threshold_percent"])
+		}
+		if rec["before_tokens_estimated"] != float64(38200) {
+			t.Errorf("before_tokens_estimated = %v, want 38200", rec["before_tokens_estimated"])
+		}
+		if rec["after_tokens_estimated"] != float64(21900) {
+			t.Errorf("after_tokens_estimated = %v, want 21900", rec["after_tokens_estimated"])
+		}
+		return
+	}
+	t.Fatal("compression_applied record not found")
+}
+
+func TestRecordCompressionAppliedOmitsRequestForHardTruncate(t *testing.T) {
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	sh.RecordCompressionApplied("a.go", 0, "warning_sync", "hard_truncate", 80, 38200, 500)
+	if err := sh.Finalize(); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	for _, rec := range readJSONLRecords(t, sessionJSONLPath(t, repoDir, sh.SessionID)) {
+		if rec["type"] != "compression_applied" {
+			continue
+		}
+		if _, ok := rec["request_no"]; ok {
+			t.Errorf("request_no = %v, want field omitted", rec["request_no"])
+		}
+		if rec["strategy"] != "hard_truncate" {
+			t.Errorf("strategy = %v, want hard_truncate", rec["strategy"])
+		}
+		return
+	}
+	t.Fatal("compression_applied record not found")
+}
+
 func TestSessionFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permissions not enforced on Windows")
